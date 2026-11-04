@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireRole } from "@/lib/auth/session";
 import { errorInfo } from "@/lib/http";
+import { regenerateSummary } from "@/lib/health-summary";
 import * as tracker from "@/lib/tracker";
 
 /**
@@ -38,4 +39,9 @@ export async function addNoteAction(n: number, body: string) {
 
 export async function deleteNoteAction(n: number, id: string) {
   return run(n, async () => tracker.deleteNote(await requireRole("admin"), n, id));
+}
+
+/** Regenerate today's AI summary for one app (once per app per hour). */
+export async function regenerateSummaryAction(n: number) {
+  return run(n, async () => regenerateSummary(await requireRole("admin"), n));
 }

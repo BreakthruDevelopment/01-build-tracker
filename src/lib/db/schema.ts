@@ -228,6 +228,8 @@ export const healthSummary = pgTable(
     demo: boolean("demo").notNull().default(false),
     model: text("model"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Last (re)generation; the regenerate limit of one per app per hour is measured from here. */
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("health_summary_app_day_uq").on(t.appN, t.day)],
 );

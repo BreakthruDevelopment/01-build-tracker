@@ -46,3 +46,10 @@ export class PayloadTooLargeError extends HttpError {
     super(413, `Body too large (limit ${limit} bytes)`);
   }
 }
+
+/** Too soon to repeat this action (for example regenerating a summary). */
+export class TooManyRequestsError extends HttpError {
+  constructor(message = "Too many requests") {
+    super(429, message);
+  }
+}
