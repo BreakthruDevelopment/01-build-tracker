@@ -1,0 +1,248 @@
+import "server-only";
+import { lookup } from "node:dns/promises";
+import { eq, ne, sql } from "drizzle-orm";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
+import { db, schema } from "@/lib/db";
+import { ConflictError } from "@/lib/errors";
+import { parseHealthUrl } from "@/lib/health-url";
+import { isPublicIp } from "@/lib/ip-guard";
+import { log } from "@/lib/log";
+import { setTrackerState } from "@/lib/tracker-state";
+import { systemTransition } from "@/lib/tracker";
+
+export const CATALOG_URL = "https://raw.githubusercontent.com/BreakthruDevelopment/ai-dev-os/main/catalog.yaml";
+const CATALOG_MAX_BYTES = 512 * 1024;
+const HEALTH_MAX_BYTES = 16 * 1024;
+const HEALTH_TIMEOUT_MS = 6000;
+const CATALOG_TIMEOUT_MS = 4000;
+/** The whole sync must finish well inside the 20 s handler budget (Lambda allows 29 s). */
+const SYNC_DEADLINE_MS = 17000;
+const CONCURRENCY = 10;
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+const catalogSchema = z.object({
+  apps: z
+    .array(
+      z.object({
+        n: z.number().int().min(1).max(30),
+        repo: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),
+        name: z.string().min(1).max(200),
+        subdomain: z.string().regex(/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/i),
+        live_cloud: z.enum(["aws", "azure", "gcp", "oci"]),
+      }),
+    )
+    .min(1)
+    .max(30),
+});
+
+/** Read a response body up to `limit` bytes; `truncated` is true when more was available. */
+async function readCapped(res: Response, limit: number): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) return { text: "", truncated: false };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      truncated = true;
+      chunks.push(value.subarray(0, value.byteLength - (total - limit)));
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+  }
+  return { text: Buffer.concat(chunks).toString("utf8"), truncated };
+}
+
+export async function syncCatalog(deadline: AbortSignal): Promise<{ updated: number; error?: string }> {
+  try {
+    const res = await fetch(CATALOG_URL, {
+      redirect: "manual",
+      cache: "no-store",
+      signal: AbortSignal.any([AbortSignal.timeout(CATALOG_TIMEOUT_MS), deadline]),
+    });
+    if (res.status !== 200) throw new Error(`catalog fetch returned ${res.status}`);
+    const { text, truncated } = await readCapped(res, CATALOG_MAX_BYTES);
+    if (truncated) throw new Error("catalog too large");
+    const catalog = catalogSchema.parse(parseYaml(text));
+
+    // Names, subdomains, clouds and repos only. Status is deliberately not in this statement.
+    const changed = await db().transaction(async (tx) => {
+      let count = 0;
+      for (const a of catalog.apps) {
+        const rows = await tx
+          .insert(schema.app)
+          .values({ n: a.n, repo: a.repo, name: a.name, subdomain: a.subdomain, liveCloud: a.live_cloud })
+          .onConflictDoUpdate({
+            target: schema.app.n,
+            set: { repo: a.repo, name: a.name, subdomain: a.subdomain, liveCloud: a.live_cloud },
+            setWhere: sql`(${schema.app.repo}, ${schema.app.name}, ${schema.app.subdomain}, ${schema.app.liveCloud})
+              is distinct from (${a.repo}, ${a.name}, ${a.subdomain}, ${a.live_cloud}::cloud_name)`,
+          })
+          .returning({ n: schema.app.n });
+        count += rows.length;
+      }
+      return count;
+    });
+    return { updated: changed };
+  } catch (err) {
+    log.warn("sync.catalog_failed", { error: err instanceof Error ? err.message : String(err) });
+    return { updated: 0, error: "catalog sync failed" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Health polling
+// ---------------------------------------------------------------------------
+
+type HealthResult =
+  | { kind: "skipped"; reason: string }
+  | { kind: "checked"; health: "ok" | "degraded" | "down"; version: string | null; ms: number };
+
+/** Race a promise against an abort signal (DNS lookups can't be aborted directly). */
+function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+/** Resolve every address for the host and require all of them to be public. */
+async function assertPublicHost(hostname: string, signal: AbortSignal): Promise<void> {
+  const addresses = await raceSignal(lookup(hostname, { all: true, verbatim: true }), signal);
+  if (addresses.length === 0 || !addresses.every((a) => isPublicIp(a.address))) {
+    throw new BlockedError("address");
+  }
+}
+
+class BlockedError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+  }
+}
+
+/**
+ * One guarded health check (issue 2 SSRF review): re-validate the URL against the allow-list,
+ * refuse private/loopback/link-local resolutions, never follow redirects, cap time and size.
+ * A residual DNS-rebinding window exists between our lookup and fetch's own; the allow-listed
+ * suffixes are either ours or deterministic/public hosting, which keeps that acceptable.
+ */
+export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promise<HealthResult> {
+  const url = parseHealthUrl(rawUrl);
+  if (!url) return { kind: "skipped", reason: "url_not_allowed" };
+  const signal = AbortSignal.any([AbortSignal.timeout(HEALTH_TIMEOUT_MS), deadline]);
+  const started = Date.now();
+  try {
+    await assertPublicHost(new URL(url).hostname, signal);
+    const res = await fetch(url, {
+      redirect: "manual",
+      cache: "no-store",
+      signal,
+      headers: { accept: "application/json", "user-agent": "build-tracker-sync" },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel().catch(() => undefined);
+      return { kind: "skipped", reason: "redirect_refused" };
+    }
+    const { text } = await readCapped(res, HEALTH_MAX_BYTES);
+    const ms = Date.now() - started;
+    let body: { status?: unknown; version?: unknown } = {};
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed && typeof parsed === "object") body = parsed as typeof body;
+    } catch {
+      // A 200 that isn't JSON is up but not trustworthy: degraded.
+    }
+    const version = typeof body.version === "string" ? body.version.slice(0, 100) : null;
+    if (res.status !== 200) {
+      // The template's /api/health answers 503 + status "degraded" when its database is down:
+      // the app itself is up, so that's degraded rather than down.
+      const health = body.status === "degraded" ? "degraded" : "down";
+      return { kind: "checked", health, version, ms };
+    }
+    return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, ms };
+  } catch (err) {
+    if (err instanceof BlockedError) return { kind: "skipped", reason: "private_address" };
+    // No DNS record yet (an app still being set up) says nothing about the app's health.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "ENOTFOUND" || code === "ENODATA") return { kind: "skipped", reason: "dns_not_found" };
+    if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline" };
+    return { kind: "checked", health: "down", version: null, ms: Date.now() - started };
+  }
+}
+
+async function pollApps(deadline: AbortSignal) {
+  const apps = await db().select().from(schema.app).where(ne(schema.app.status, "planned"));
+  const summary = { checked: 0, ok: 0, down: 0, skipped: 0 };
+  const queue = [...apps];
+
+  async function worker() {
+    for (let a = queue.shift(); a; a = queue.shift()) {
+      const target = a.healthUrl ?? `https://${a.subdomain}/api/health`;
+      const result = await checkHealth(target, deadline);
+      if (result.kind === "skipped") {
+        summary.skipped++;
+        log.warn("sync.health_skipped", { n: a.n, reason: result.reason });
+        continue;
+      }
+      summary.checked++;
+      if (result.health === "ok") summary.ok++;
+      if (result.health === "down") summary.down++;
+      try {
+        await record(a, result);
+      } catch (err) {
+        log.error("sync.health_record_failed", { n: a.n, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, apps.length) }, worker));
+  return summary;
+}
+
+async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult, { kind: "checked" }>) {
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx
+      .update(schema.app)
+      .set({ health: r.health, healthVersion: r.version, healthMs: r.ms, healthAt: now })
+      .where(eq(schema.app.n, a.n));
+    if (a.health !== r.health) {
+      await tx.insert(schema.appEvent).values({
+        appN: a.n,
+        source: "health",
+        kind: "health_change",
+        title: `Health ${a.health} → ${r.health}${r.version ? ` (version ${r.version.slice(0, 40)})` : ""}`,
+        occurredAt: now,
+      });
+    }
+  });
+  if (a.status === "building" && r.health === "ok" && r.version && r.version !== "dev") {
+    try {
+      await systemTransition(a.n, "live", `Health check ok (version ${r.version.slice(0, 40)})`);
+    } catch (err) {
+      if (!(err instanceof ConflictError)) throw err;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+export async function runSync() {
+  const deadline = AbortSignal.timeout(SYNC_DEADLINE_MS);
+  const started = Date.now();
+  const catalog = await syncCatalog(deadline);
+  const health = await pollApps(deadline);
+  const result = { catalog, health };
+  await setTrackerState("last_sync", { ...result, ms: Date.now() - started });
+  log.info("sync.done", { ...result, ms: Date.now() - started });
+  return result;
+}

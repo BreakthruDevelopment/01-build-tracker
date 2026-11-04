@@ -232,6 +232,16 @@ export const healthSummary = pgTable(
   (t) => [uniqueIndex("health_summary_app_day_uq").on(t.appN, t.day)],
 );
 
+/**
+ * Tiny key-value store for machine bookkeeping that /admin shows later: `last_sync` and
+ * `last_ingest`, each `{ at: ISO time, ...small summary }`. Never holds secrets or payloads.
+ */
+export const trackerState = pgTable("tracker_state", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof user.$inferSelect;
 export type App = typeof app.$inferSelect;
 export type AppEvent = typeof appEvent.$inferSelect;
