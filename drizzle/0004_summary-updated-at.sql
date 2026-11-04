@@ -1,0 +1,1 @@
+ALTER TABLE "health_summary" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;

@@ -64,4 +64,7 @@ case "$code" in 401|503) pass "ingest without a token refused ($code)" ;; *) fai
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/sync")
 case "$code" in 401|503) pass "sync without a token refused ($code)" ;; *) fail "sync without token should be 401 or 503, got $code" ;; esac
 
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/summaries/run")
+case "$code" in 401|503) pass "summaries run without a token refused ($code)" ;; *) fail "summaries run without token should be 401 or 503, got $code" ;; esac
+
 echo "SMOKE PASS"
