@@ -1,23 +1,34 @@
 import { ZodError } from "zod";
 import { AiError } from "@/lib/ai/types";
 import { ForbiddenError, UnauthorizedError } from "@/lib/auth/rbac";
+import { HttpError } from "@/lib/errors";
 import { log } from "@/lib/log";
 
-/** Map known errors to clean JSON responses; never leak stack traces or internals. */
-export function errorResponse(err: unknown): Response {
-  if (err instanceof UnauthorizedError || err instanceof ForbiddenError) {
-    return Response.json({ error: err.message }, { status: err.status });
+export type ErrorInfo = { status: number; body: { error: string; issues?: unknown } };
+
+/** Map known errors to a status and a client-safe body; never leak stack traces or internals. */
+export function errorInfo(err: unknown): ErrorInfo {
+  if (err instanceof UnauthorizedError || err instanceof ForbiddenError || err instanceof HttpError) {
+    return { status: err.status, body: { error: err.message } };
   }
   if (err instanceof ZodError) {
-    return Response.json(
-      { error: "Invalid input", issues: err.issues.map((i) => ({ path: i.path, message: i.message })) },
-      { status: 400 },
-    );
+    return {
+      status: 400,
+      body: {
+        error: "Invalid input",
+        issues: err.issues.map((i) => ({ path: i.path, message: i.message })),
+      },
+    };
   }
   if (err instanceof AiError) {
     const status = err.kind === "input_rejected" ? 400 : err.kind === "quota" ? 429 : 502;
-    return Response.json({ error: err.message }, { status });
+    return { status, body: { error: err.message } };
   }
   log.error("request.failed", { error: err instanceof Error ? err.message : String(err) });
-  return Response.json({ error: "Something went wrong" }, { status: 500 });
+  return { status: 500, body: { error: "Something went wrong" } };
+}
+
+export function errorResponse(err: unknown): Response {
+  const { status, body } = errorInfo(err);
+  return Response.json(body, { status });
 }
