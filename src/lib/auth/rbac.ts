@@ -9,10 +9,14 @@ export type Role = (typeof ROLES)[number];
 
 export type Actor = { id: string; role: Role };
 
-export type Action = "read" | "create" | "update" | "delete";
+/** `manage` is admin-only portfolio administration (status changes, health URL, notes). */
+export type Action = "read" | "create" | "update" | "delete" | "manage";
 
-/** A resource the actor may or may not own. */
-export type Owned = { ownerId: string };
+/**
+ * A resource the actor may or may not own. With `strict`, ownership is required even
+ * for admins (private notes: only the author may change them).
+ */
+export type Owned = { ownerId: string; strict?: boolean };
 
 export function isRole(value: unknown): value is Role {
   return typeof value === "string" && (ROLES as readonly string[]).includes(value);
@@ -26,6 +30,9 @@ export function toRole(value: string | null | undefined): Role {
 }
 
 export function can(actor: Actor, action: Action, resource?: Owned): boolean {
+  // Strict ownership: only the owner, whatever their role. Fails closed, then the normal rules apply.
+  if (resource?.strict && resource.ownerId !== actor.id) return false;
+  if (action === "manage") return actor.role === "admin";
   if (actor.role === "admin") return true;
   if (action === "create") return true;
   if (!resource) return false;

@@ -4,8 +4,6 @@
  * user deletion behaves as designed.
  */
 import { readFile } from "node:fs/promises";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -16,7 +14,6 @@ describe.skipIf(!url)("tracker schema (Postgres)", () => {
 
   beforeAll(async () => {
     sql = postgres(url!, { max: 1 });
-    await migrate(drizzle(sql), { migrationsFolder: "./drizzle" });
     await sql`delete from "user" where id like 'sc-%'`;
     for (const id of ["sc-admin", "sc-other"]) {
       await sql`insert into "user" (id, name, email, role) values (${id}, ${id}, ${id + "@test.local"}, 'admin')`;

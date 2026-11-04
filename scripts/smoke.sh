@@ -36,4 +36,20 @@ pass "home page renders"
 code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_A" "$BASE_URL/admin")
 case "$code" in 302|303|307|308|403) pass "non-admin kept out of /admin ($code)" ;; *) fail "non-admin /admin should redirect or 403, got $code" ;; esac
 
+# Public board and write protection (issue 6 will fold these into the full rewrite).
+board=$(curl -fsS "$BASE_URL/api/board") || fail "GET /api/board failed"
+count=$(echo "$board" | grep -o '"n":' | wc -l | tr -d ' ')
+[ "$count" = "30" ] || fail "board should list 30 apps, got $count"
+pass "board lists 30 apps"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -H "origin: $BASE_URL" \
+  -d '{"to":"building"}' "$BASE_URL/api/apps/1/transition")
+[ "$code" = "401" ] || fail "anonymous transition should be 401, got $code"
+pass "anonymous transition refused (401)"
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR_A" -H 'content-type: application/json' -H "origin: $BASE_URL" \
+  -d '{"to":"building"}' "$BASE_URL/api/apps/1/transition")
+[ "$code" = "403" ] || fail "signed-in user transition should be 403, got $code"
+pass "non-admin transition refused (403)"
+
 echo "SMOKE PASS"
