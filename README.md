@@ -8,8 +8,8 @@ image that deploys to AWS, Azure, Google Cloud or Oracle Cloud.
 
 _Each app replaces this section: the customer problem, who uses it, and what the AI feature does._
 
-The template ships an example "items" feature: users manage their own items, admins see everyone's, and
-an AI summary describes the list.
+Work in progress: the data model and the 30-app catalog seed are in place; the API, webhooks, AI summary and
+board UI follow in later issues.
 
 ## Architecture
 

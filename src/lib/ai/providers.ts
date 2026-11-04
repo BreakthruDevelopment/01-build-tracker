@@ -1,13 +1,12 @@
+import { env } from "@/lib/env";
 import { type AiProvider, AiError } from "./types";
-
-const TIMEOUT_MS = 30_000;
 
 async function post(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(env().AI_TIMEOUT_MS),
   });
   if (res.status === 429) throw new AiError("Model quota reached", "quota");
   if (!res.ok) {

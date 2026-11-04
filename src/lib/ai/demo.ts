@@ -4,11 +4,7 @@
  * Each app adds a fixture for each AI task it defines.
  */
 export const demoFixtures: Record<string, unknown> = {
-  "summarize-items": {
-    summary:
-      "You have a few open items. The most recent ones focus on setup work; nothing looks overdue.",
-    highlights: ["Setup tasks are the largest group", "No items are flagged urgent"],
-  },
+  // "daily-health-summary" is added with the AI feature.
 };
 
 export function demoAnswer(task: string): string {

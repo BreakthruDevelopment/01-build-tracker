@@ -1,7 +1,7 @@
 import type { z } from "zod";
 
 export type GenerateRequest<T> = {
-  /** Stable name for this AI feature, e.g. "summarize-items". Used for demo fixtures and logs. */
+  /** Stable name for this AI feature, e.g. "daily-health-summary". Used for demo fixtures and logs. */
   task: string;
   system: string;
   prompt: string;

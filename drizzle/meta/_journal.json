@@ -8,6 +8,20 @@
       "when": 1793690781030,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793825984833,
+      "tag": "0001_tracker-schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793825992166,
+      "tag": "0002_seed-catalog",
+      "breakpoints": true
     }
   ]
 }
