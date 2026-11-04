@@ -188,6 +188,66 @@ describe.skipIf(!url)("daily summaries (Postgres)", () => {
       expect(row.flags[0].detail).toMatch(/PR #4/);
     });
 
+    it("a provider failure with demo fallback on stores rule-only placeholders, not fixture text, and the next run replaces them", async () => {
+      setEnv({ AI_PROVIDER: "gemini", AI_FALLBACK_TO_DEMO: "true" });
+      vi.stubGlobal("fetch", vi.fn(async () => { modelCalls++; return new Response("quota", { status: 429 }); }));
+      modelCalls = 0;
+      await building([1, 2, 3]);
+
+      const first = await (await post({ token: SYNC })).json();
+      expect(first).toMatchObject({ fallback: true, remaining: 3 });
+      expect(modelCalls).toBe(1);
+      const rows = await sql`select app_n, summary, demo, model from health_summary where app_n in (1, 2, 3) order by app_n`;
+      for (const r of rows) {
+        expect(r.model).toBe("rules-fallback");
+        expect(r.demo).toBe(true);
+        expect(r.summary).not.toMatch(/sha-1a2b3c4|PR #3|Live on AWS/);
+      }
+      // Not-started apps are real answers and are not retried.
+      const [ns] = await sql`select model, demo from health_summary where app_n = 20`;
+      expect(ns).toEqual({ model: null, demo: false });
+
+      // The model recovers: the next run calls it again and overwrites the placeholders.
+      stubModel();
+      const second = await (await post({ token: SYNC })).json();
+      expect(second).toEqual({ done: 3, remaining: 0 });
+      expect(modelCalls).toBe(1);
+      const after = await sql`select summary, demo, model from health_summary where app_n in (1, 2, 3) order by app_n`;
+      expect(after.map((r) => r.summary)).toEqual(["Model note for app 1.", "Model note for app 2.", "Model note for app 3."]);
+      expect(after.every((r) => !r.demo && r.model !== "rules-fallback")).toBe(true);
+    });
+
+    it("a fallback placeholder does not block an admin's regenerate", async () => {
+      setEnv({ AI_PROVIDER: "gemini", AI_FALLBACK_TO_DEMO: "true" });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("quota", { status: 429 })));
+      await building([1]);
+      await post({ token: SYNC });
+      session.role = "admin";
+      stubModel();
+      expect((await post({ body: { n: 1 } })).status).toBe(200);
+      const [row] = await sql`select summary from health_summary where app_n = 1`;
+      expect(row.summary).toBe("Model note for app 1.");
+    });
+
+    it("the stall rule counts pushes on any branch, not only the default branch", async () => {
+      await building([1, 2]);
+      await sql`update app set last_push_at = now() - interval '40 hours' where n in (1, 2)`;
+      await sql`insert into app_event (app_n, source, kind, title, occurred_at) values (1, 'github', 'push', 'claude/x: wip', now() - interval '2 hours')`;
+      await sql`insert into app_event (app_n, source, kind, title, occurred_at) values (2, 'github', 'push', 'main: old', now() - interval '40 hours')`;
+      await post({ token: SYNC });
+      const rows = await sql`select app_n, health from health_summary where app_n in (1, 2) order by app_n`;
+      expect(rows.map((r) => r.health)).toEqual(["green", "amber"]);
+    });
+
+    it("health older than 6 hours (or never checked) counts as unknown for the rules", async () => {
+      await sql`update app set status = 'live', health = 'down', health_at = now() - interval '7 hours' where n = 1`;
+      await sql`update app set status = 'live', health = 'down', health_at = now() - interval '1 hour', last_push_at = now() where n = 2`;
+      await sql`update app set status = 'live', health = 'down', health_at = null, last_push_at = now() where n = 3`;
+      await post({ token: SYNC });
+      const rows = await sql`select app_n, health from health_summary where app_n in (1, 2, 3) order by app_n`;
+      expect(rows.map((r) => r.health)).toEqual(["green", "red", "green"]);
+    });
+
     it("a failed model call stores nothing so the next run retries", async () => {
       setEnv({ AI_PROVIDER: "gemini" });
       vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));

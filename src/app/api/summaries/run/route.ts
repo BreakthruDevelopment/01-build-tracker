@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     const caller = await authorizeTokenOrAdmin(request, env().SYNC_TOKEN);
     const bytes = await readBodyCapped(request, 1024);
     const { n } = bytes.length === 0 ? {} : body.parse(parseJsonBody(bytes));
-    if (n === undefined) return Response.json(await runDailySummaries());
+    if (n === undefined) return Response.json(await runDailySummaries(caller.kind === "admin" ? caller.actor : "system"));
     if (caller.kind !== "admin") throw new ForbiddenError("Only an admin can regenerate a summary.");
     return Response.json(await regenerateSummary(caller.actor, n));
   } catch (err) {

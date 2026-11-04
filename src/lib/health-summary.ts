@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, desc, eq, gte, inArray, isNull, like, not, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, like, not, or, sql } from "drizzle-orm";
 import { type AppFacts, type AppSummary, MAX_APPS_PER_CALL, isNotStarted, summarizeFacts } from "@/lib/ai/daily-health-summary";
 import { type Actor, assertCan } from "@/lib/auth/rbac";
 import { db, schema } from "@/lib/db";
@@ -22,7 +22,15 @@ const STALLED_WINDOW_MS = 30 * 3_600_000;
 /** Usage readings older than this are ignored, so a silent monitor can't pin an app red forever. */
 const USAGE_WINDOW_MS = 72 * 3_600_000;
 
-export type RunResult = { done: number; remaining: number };
+/** Marker for rule-only rows stored because the model was unavailable; the next run replaces them. */
+export const FALLBACK_MODEL = "rules-fallback";
+/** App health older than this counts as unknown for the rules. */
+const HEALTH_FRESH_MS = 6 * 3_600_000;
+
+export type RunResult = { done: number; remaining: number; fallback?: true };
+
+/** A summary row that still needs generating: none yet today, or a fallback placeholder. */
+const needsSummary = () => or(isNull(HS.id), eq(HS.model, FALLBACK_MODEL));
 
 export const utcDay = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -31,7 +39,7 @@ async function countMissing(day: string): Promise<number> {
     .select({ c: count() })
     .from(A)
     .leftJoin(HS, and(eq(HS.appN, A.n), eq(HS.day, day)))
-    .where(isNull(HS.id));
+    .where(needsSummary());
   return row.c;
 }
 
@@ -55,9 +63,10 @@ async function loadFacts(rows: (typeof A.$inferSelect)[], withEvents: Set<number
     rows.map(async (r): Promise<AppFacts> => {
       let eventTitles: string[] = [];
       let stalled: AppFacts["stalled"] = [];
+      let lastPushAt = r.lastPushAt;
       if (withEvents.has(r.n)) {
         const E = schema.appEvent;
-        const [recent, stalledRows] = await Promise.all([
+        const [recent, stalledRows, [push]] = await Promise.all([
           db()
             .select({ title: E.title })
             .from(E)
@@ -70,7 +79,9 @@ async function loadFacts(rows: (typeof A.$inferSelect)[], withEvents: Set<number
             .where(and(eq(E.appN, r.n), like(E.kind, "stalled.%"), gte(E.occurredAt, new Date(now.getTime() - STALLED_WINDOW_MS))))
             .orderBy(desc(E.occurredAt))
             .limit(10),
+          db().select({ at: E.occurredAt }).from(E).where(and(eq(E.appN, r.n), eq(E.kind, "push"))).orderBy(desc(E.occurredAt)).limit(1),
         ]);
+        if (push && (!lastPushAt || push.at > lastPushAt)) lastPushAt = push.at;
         eventTitles = recent.map((e) => e.title);
         // Only the latest report counts: an older one may describe work that has since moved.
         const latest = stalledRows[0]?.occurredAt.getTime();
@@ -86,9 +97,9 @@ async function loadFacts(rows: (typeof A.$inferSelect)[], withEvents: Set<number
         name: r.name,
         status: r.status,
         statusChangedAt: r.statusChangedAt,
-        health: r.health,
+        health: r.healthAt && now.getTime() - r.healthAt.getTime() <= HEALTH_FRESH_MS ? r.health : "unknown",
         healthVersion: r.healthVersion,
-        lastPushAt: r.lastPushAt,
+        lastPushAt,
         ciConclusion: r.ciConclusion,
         ciWorkflow: r.ciWorkflow,
         liveCloud: r.liveCloud,
@@ -100,8 +111,12 @@ async function loadFacts(rows: (typeof A.$inferSelect)[], withEvents: Set<number
   );
 }
 
-function toRow(s: AppSummary, day: string, now: Date, modelInfo: { demo: boolean; model: string | null }): typeof HS.$inferInsert {
+function toRow(s: AppSummary, day: string, now: Date, modelInfo: { demo: boolean; model: string | null; fallback: boolean }): typeof HS.$inferInsert {
   const fromModel = s.source === "model";
+  // Rule-only text written because the model was down is marked so the next run replaces it.
+  if (modelInfo.fallback && s.source === "rules") {
+    return { appN: s.n, day, health: s.health, summary: s.summary, flags: s.flags, demo: true, model: FALLBACK_MODEL, updatedAt: now };
+  }
   return {
     appN: s.n,
     day,
@@ -125,13 +140,15 @@ async function withEventSet(ns: number[]): Promise<Set<number>> {
  * events get "Not started." without the model and don't count toward the 6. Already-stored
  * summaries are never touched, so a second run on the same day makes no model call.
  */
-export async function runDailySummaries(now = new Date()): Promise<RunResult> {
+export async function runDailySummaries(caller: "system" | Actor, now = new Date()): Promise<RunResult> {
+  // "system" is the SYNC_TOKEN caller, authenticated by the route; a person must be allowed to manage.
+  if (caller !== "system") assertCan(caller, "manage");
   const day = utcDay(now);
   const candidates = await db()
     .select({ app: A })
     .from(A)
     .leftJoin(HS, and(eq(HS.appN, A.n), eq(HS.day, day)))
-    .where(isNull(HS.id))
+    .where(needsSummary())
     .orderBy(A.n)
     .then((rows) => rows.map((r) => r.app));
   if (candidates.length === 0) return { done: 0, remaining: 0 };
@@ -146,12 +163,24 @@ export async function runDailySummaries(now = new Date()): Promise<RunResult> {
   const stored = await db()
     .insert(HS)
     .values(result.summaries.map((s) => toRow(s, day, now, result)))
-    .onConflictDoNothing({ target: [HS.appN, HS.day] })
+    // Only fallback placeholders are replaced; a real summary is never overwritten by a run.
+    .onConflictDoUpdate({
+      target: [HS.appN, HS.day],
+      set: {
+        health: sql`excluded.health`,
+        summary: sql`excluded.summary`,
+        flags: sql`excluded.flags`,
+        demo: sql`excluded.demo`,
+        model: sql`excluded.model`,
+        updatedAt: sql`excluded.updated_at`,
+      },
+      setWhere: sql`${HS.model} = ${FALLBACK_MODEL}`,
+    })
     .returning({ n: HS.appN });
 
   const remaining = await countMissing(day);
-  log.info("summaries.run", { done: stored.length, remaining, modelCalled: result.modelCalled, demo: result.demo });
-  return { done: stored.length, remaining };
+  log.info("summaries.run", { done: stored.length, remaining, modelCalled: result.modelCalled, demo: result.demo, fallback: result.fallback });
+  return result.fallback ? { done: stored.length, remaining, fallback: true } : { done: stored.length, remaining };
 }
 
 /**
@@ -167,8 +196,9 @@ export async function regenerateSummary(actor: Actor, nInput: unknown, now = new
   const [app] = await db().select().from(A).where(eq(A.n, n));
   if (!app) throw new NotFoundError("Unknown app");
 
-  const [existing] = await db().select({ updatedAt: HS.updatedAt }).from(HS).where(and(eq(HS.appN, n), eq(HS.day, day)));
-  if (existing && existing.updatedAt > cutoff) {
+  const [existing] = await db().select({ updatedAt: HS.updatedAt, model: HS.model }).from(HS).where(and(eq(HS.appN, n), eq(HS.day, day)));
+  // A fallback placeholder is not a real generation, so it never counts against the hourly limit.
+  if (existing && existing.model !== FALLBACK_MODEL && existing.updatedAt > cutoff) {
     const minutes = Math.max(1, Math.ceil((REGENERATE_INTERVAL_MS - (now.getTime() - existing.updatedAt.getTime())) / 60_000));
     throw new TooManyRequestsError(`This summary was generated recently. Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`);
   }
@@ -191,7 +221,7 @@ export async function regenerateSummary(actor: Actor, nInput: unknown, now = new
         model: sql`excluded.model`,
         updatedAt: sql`excluded.updated_at`,
       },
-      setWhere: sql`${HS.updatedAt} <= ${cutoff.toISOString()}::timestamptz`,
+      setWhere: sql`${HS.updatedAt} <= ${cutoff.toISOString()}::timestamptz or ${HS.model} = ${FALLBACK_MODEL}`,
     })
     .returning({ n: HS.appN });
   if (written.length === 0) {
@@ -200,5 +230,5 @@ export async function regenerateSummary(actor: Actor, nInput: unknown, now = new
 
   const remaining = await countMissing(day);
   log.info("summaries.regenerate", { n, modelCalled: result.modelCalled, demo: result.demo, notStarted: isNotStarted(facts) });
-  return { done: 1, remaining };
+  return result.fallback ? { done: 1, remaining, fallback: true } : { done: 1, remaining };
 }

@@ -239,6 +239,16 @@ describe("rule floor and merge", () => {
     expect(out[1].summary).toMatch(/no issues/i);
   });
 
+  it("keeps every rule flag as written even when the model used the same kind, then adds other model kinds", () => {
+    const f = facts({ ciConclusion: "failure", ciWorkflow: "ci" });
+    const model: ModelOutput = {
+      apps: [{ n: 7, health: "red", summary: "s", flags: [{ kind: "failing_ci", detail: "vague" }, { kind: "other", detail: "extra" }] }],
+    };
+    const out = mergeWithRules([f], model, NOW)[0];
+    expect(out.flags.map((x) => x.kind)).toEqual(["failing_ci", "other"]);
+    expect(out.flags[0].detail).toMatch(/workflow ci /);
+  });
+
   it("keeps at most 5 flags, rule flags first", () => {
     const f = facts({ ciConclusion: "failure" });
     const many = Array.from({ length: 5 }, (_, i) => ({ kind: "other" as const, detail: `x${i}` }));
@@ -297,6 +307,17 @@ describe("demo fixture", () => {
     expect(out.summaries.map((s) => s.n)).toEqual([3, 4, 5]);
     expect(out.summaries.every((s) => s.source === "rules")).toBe(true);
     expect(out.summaries[1].health).toBe("red");
+  });
+
+  it("is not used when a live provider fails: the fixture text is ignored and the result is marked fallback", async () => {
+    setEnv("gemini");
+    vi.stubEnv("AI_FALLBACK_TO_DEMO", "true");
+    resetEnvCache();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("quota", { status: 429 })));
+    const out = await summarizeFacts([facts({ n: 1 }), facts({ n: 2, status: "building", lastPushAt: hoursAgo(1) })], NOW);
+    expect(out.fallback).toBe(true);
+    expect(out.summaries.every((s) => s.source === "rules")).toBe(true);
+    expect(JSON.stringify(out.summaries)).not.toMatch(/sha-1a2b3c4|PR #3/);
   });
 
   it("uses the fixture text for apps 1 and 2 when they are in the batch", async () => {

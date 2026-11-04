@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Status } from "@/lib/status";
+import { env } from "@/lib/env";
 import { generate } from "./index";
 
 /**
@@ -72,6 +73,7 @@ export type AppFacts = {
   statusChangedAt: Date;
   health: "ok" | "degraded" | "down" | "unknown";
   healthVersion: string | null;
+  /** Newest push on any branch (work happens on feature branches, not only the default branch). */
   lastPushAt: Date | null;
   ciConclusion: string | null;
   ciWorkflow: string | null;
@@ -258,9 +260,9 @@ export function mergeWithRules(facts: AppFacts[], model: ModelOutput | null, now
     const health = worse(m.health, rules.floor);
     if (health !== m.health) return ruleOnlySummary(f, rules);
 
-    const have = new Set(m.flags.map((fl) => fl.kind));
-    const added = rules.flags.filter((fl) => !have.has(fl.kind));
-    const flags = [...added, ...m.flags].slice(0, 5);
+    // Rule flags are kept exactly as written; model flags are added only for kinds the rules didn't cover.
+    const covered = new Set(rules.flags.map((fl) => fl.kind));
+    const flags = [...rules.flags, ...m.flags.filter((fl) => !covered.has(fl.kind))].slice(0, 5);
     return { n: f.n, health, summary: m.summary, flags, source: "model" as const };
   });
 }
@@ -275,6 +277,11 @@ export type SummarizeResult = {
   modelCalled: boolean;
   demo: boolean;
   model: string | null;
+  /**
+   * The provider failed (quota, timeout, outage) or has no key, and generate() answered from the demo
+   * fixture. The fixture is ignored for real apps; summaries are rule-only and should be retried.
+   */
+  fallback: boolean;
 };
 
 /** Summarize a batch (at most 6 apps that need the model; "Not started." apps are free). */
@@ -282,9 +289,17 @@ export async function summarizeFacts(facts: AppFacts[], now: Date): Promise<Summ
   const needModel = facts.filter((f) => !isNotStarted(f));
   if (needModel.length > MAX_APPS_PER_CALL) throw new Error(`At most ${MAX_APPS_PER_CALL} apps per model call`);
   if (needModel.length === 0) {
-    return { summaries: mergeWithRules(facts, null, now), modelCalled: false, demo: false, model: null };
+    return { summaries: mergeWithRules(facts, null, now), modelCalled: false, demo: false, model: null, fallback: false };
   }
   const lines = needModel.map((f) => buildAppLine(f, evaluateRules(f, now), now));
   const result = await generate({ task: TASK, system: SYSTEM_PROMPT, prompt: buildPrompt(lines), schema: outputSchema, maxOutputTokens: 2500 });
-  return { summaries: mergeWithRules(facts, result.data, now), modelCalled: true, demo: result.demo, model: result.model };
+  // The demo fixture describes made-up apps. It is only for AI_PROVIDER=demo, never a stand-in for a failed live call.
+  const fallback = result.demo && env().AI_PROVIDER !== "demo";
+  return {
+    summaries: mergeWithRules(facts, fallback ? null : result.data, now),
+    modelCalled: true,
+    demo: result.demo,
+    model: result.model,
+    fallback,
+  };
 }
