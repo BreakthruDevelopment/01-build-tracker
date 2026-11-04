@@ -41,10 +41,13 @@ describe.skipIf(!url)("tracker schema (Postgres)", () => {
 
   it("makes the seed idempotent and never overwrites existing rows", async () => {
     await sql`update app set status = 'building' where n = 2`;
-    await sql.unsafe(await readFile("./drizzle/0002_seed-catalog.sql", "utf8"));
-    const [row] = await sql`select count(*)::int as c, max(status::text) filter (where n = 2) as s from app`;
-    expect(row).toMatchObject({ c: 30, s: "building" });
-    await sql`update app set status = 'planned' where n = 2`;
+    try {
+      await sql.unsafe(await readFile("./drizzle/0002_seed-catalog.sql", "utf8"));
+      const [row] = await sql`select count(*)::int as c, max(status::text) filter (where n = 2) as s from app`;
+      expect(row).toMatchObject({ c: 30, s: "building" });
+    } finally {
+      await sql`update app set status = 'planned' where n = 2`;
+    }
   });
 
   it("rejects a duplicate repo and an app number outside 1 to 30", async () => {
