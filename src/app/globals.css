@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. Each app re-skins by changing these values only;
+ * components reference the tokens, never raw colors.
+ */
+:root {
+  --background: #f7f7f5;
+  --surface: #ffffff;
+  --foreground: #1b1d1f;
+  --muted: #5f6368;
+  --border: #e3e3df;
+  --accent: #2f5bd3;
+  --accent-foreground: #ffffff;
+  --danger: #b42318;
+  --success: #1f7a4d;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121314;
+    --surface: #1b1c1e;
+    --foreground: #ececea;
+    --muted: #a1a3a6;
+    --border: #2c2e31;
+    --accent: #7b9cff;
+    --accent-foreground: #0d1220;
+    --danger: #f97066;
+    --success: #4fbf86;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --radius-card: var(--radius);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
