@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end smoke test against a running app (local, CI, or a deployed URL).
-# Signs up two users over HTTP and proves one can't delete the other's item.
+# Signs up two users over HTTP and checks the pages a signed-in non-admin may and may not see.
 #   BASE_URL=https://app7.breakthruventures.ai ./scripts/smoke.sh
 set -euo pipefail
 
@@ -27,26 +27,13 @@ signup "$JAR_A" "smoke-a-$RUN_ID@example.test"
 signup "$JAR_B" "smoke-b-$RUN_ID@example.test"
 pass "two users signed up"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/items")
-[ "$code" = "401" ] || fail "anonymous list should be 401, got $code"
-pass "anonymous access refused"
+# Interim checks while the tracker is built; issue 6 replaces these with the board and
+# permission checks from the spec.
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/")
+[ "$code" = "200" ] || fail "home page should be 200, got $code"
+pass "home page renders"
 
-item=$(curl -fsS -b "$JAR_A" -H 'content-type: application/json' -H "origin: $BASE_URL" \
-  -d '{"title":"smoke item"}' "$BASE_URL/api/items") || fail "create item failed"
-id=$(echo "$item" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-[ -n "$id" ] || fail "no item id in $item"
-pass "user A created an item"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$JAR_B" -H "origin: $BASE_URL" "$BASE_URL/api/items/$id")
-[ "$code" = "403" ] || fail "user B deleting A's item should be 403, got $code"
-pass "user B blocked from A's item"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR_A" -H "origin: $BASE_URL" "$BASE_URL/api/ai/summarize")
-[ "$code" = "200" ] || fail "AI summary should be 200, got $code"
-pass "AI summary responds"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$JAR_A" -H "origin: $BASE_URL" "$BASE_URL/api/items/$id")
-[ "$code" = "204" ] || fail "owner delete should be 204, got $code"
-pass "owner deleted their item"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_A" "$BASE_URL/admin")
+case "$code" in 302|303|307|308|403) pass "non-admin kept out of /admin ($code)" ;; *) fail "non-admin /admin should redirect or 403, got $code" ;; esac
 
 echo "SMOKE PASS"
