@@ -52,4 +52,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR_A" -H 'content-ty
 [ "$code" = "403" ] || fail "signed-in user transition should be 403, got $code"
 pass "non-admin transition refused (403)"
 
+# Machine endpoints: closed without credentials (503 while the secret is unset, 401 once it is).
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -H 'x-github-event: push' -H 'x-github-delivery: smoke-bad-sig' -H 'x-hub-signature-256: sha256=00' \
+  -d '{}' "$BASE_URL/api/webhooks/github")
+case "$code" in 401|503) pass "webhook with a bad signature refused ($code)" ;; *) fail "webhook bad signature should be 401 or 503, got $code" ;; esac
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{}' "$BASE_URL/api/ingest")
+case "$code" in 401|503) pass "ingest without a token refused ($code)" ;; *) fail "ingest without token should be 401 or 503, got $code" ;; esac
+
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/sync")
+case "$code" in 401|503) pass "sync without a token refused ($code)" ;; *) fail "sync without token should be 401 or 503, got $code" ;; esac
+
 echo "SMOKE PASS"

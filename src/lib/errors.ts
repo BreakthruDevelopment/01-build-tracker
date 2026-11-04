@@ -27,3 +27,22 @@ export class BadRequestError extends HttpError {
     super(400, message);
   }
 }
+
+/** A machine endpoint whose secret isn't set. Always closed, never open. */
+export class NotConfiguredError extends HttpError {
+  constructor() {
+    super(503, "not configured");
+  }
+}
+
+export class UnauthorizedTokenError extends HttpError {
+  constructor() {
+    super(401, "Unauthorized");
+  }
+}
+
+export class PayloadTooLargeError extends HttpError {
+  constructor(limit: number) {
+    super(413, `Body too large (limit ${limit} bytes)`);
+  }
+}
