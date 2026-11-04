@@ -22,6 +22,12 @@ const schema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Provider call timeout. 20 s keeps AI calls inside Lambda's 29 s limit.
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
+  // Build Tracker machine endpoints. Each is optional; an unset one makes its endpoint answer 503.
+  GITHUB_WEBHOOK_SECRET: z.string().optional(),
+  INGEST_TOKEN: z.string().optional(),
+  SYNC_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
