@@ -29,6 +29,13 @@ vi.mock("node:dns/promises", () => ({
     const dashed = /^(\d+)-(\d+)-(\d+)-(\d+)\.sslip\.io$/.exec(host);
     const dotted = /^(\d+\.\d+\.\d+\.\d+)\.sslip\.io$/.exec(host);
     const mapped = host === "mapped.sslip.io" ? "::ffff:127.0.0.1" : null;
+    if (host === "mixed.sslip.io") {
+      return [
+        { address: "93.184.216.34", family: 4 },
+        { address: "10.0.0.1", family: 4 },
+      ];
+    }
+    if (host === "nodns.breakthruventures.ai") throw Object.assign(new Error("not found"), { code: "ENOTFOUND" });
     const address = mapped ?? (dashed ? dashed.slice(1).join(".") : dotted ? dotted[1] : "93.184.216.34");
     return [{ address, family: address.includes(":") ? 6 : 4 }];
   },
@@ -300,8 +307,13 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
 
   // -------------------------------------------------------------------------
   describe("POST /api/sync", () => {
-    const post = (token: string | null = SYNC) =>
-      syncRoute.POST(new Request("http://localhost/api/sync", { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {} }));
+    const post = (token: string | null = SYNC, origin?: string) =>
+      syncRoute.POST(
+        new Request("http://localhost/api/sync", {
+          method: "POST",
+          headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(origin ? { origin } : {}) },
+        }),
+      );
 
     type Handler = (u: URL) => Response | Promise<Response>;
     function stubFetch(handler: Handler, delayMs = 40) {
@@ -342,8 +354,15 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response(await catalogYaml()) : healthy()));
       session.role = "admin";
       setEnv({ SYNC_TOKEN: undefined });
-      const res = await post(null);
+      const res = await post(null, new URL(envMod.env().APP_URL).origin);
       expect(res.status).toBe(200);
+    });
+
+    it("refuses an admin session from another origin or with no Origin", async () => {
+      session.role = "admin";
+      setEnv({ SYNC_TOKEN: undefined });
+      expect((await post(null, "https://app2.breakthruventures.ai")).status).toBe(403);
+      expect((await post(null)).status).toBe(403);
     });
 
     it("upserts the catalog but never changes status, and polls 30 apps well under 20 s", async () => {
@@ -440,6 +459,31 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       expect(fetched.some((f) => f.includes("169.254.169.254/"))).toBe(false);
       const rows = await sql`select distinct health from app where n between 7 and 12`;
       expect(rows.map((r) => r.health)).toEqual(["unknown"]);
+    });
+
+    it("refuses a name when any of its DNS answers is private, and skips names with no DNS record", async () => {
+      await resetApps();
+      await sql`update app set status = 'building', health_url = 'https://mixed.sslip.io/api/health' where n = 15`;
+      await sql`update app set status = 'building', health_url = 'https://nodns.breakthruventures.ai/api/health' where n = 16`;
+      const fetched = stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response("apps: []") : healthy()));
+      const body = await (await post()).json();
+      expect(body.health).toMatchObject({ checked: 0, skipped: 2 });
+      expect(fetched.some((f) => f.includes("mixed.sslip.io") || f.includes("nodns."))).toBe(false);
+      const rows = await sql`select distinct health from app where n in (15, 16)`;
+      expect(rows.map((r) => r.health)).toEqual(["unknown"]);
+    });
+
+    it("a 503 with status degraded is degraded, not down", async () => {
+      await resetApps();
+      await sql`update app set status = 'building' where n = 17`;
+      stubFetch(async (u) =>
+        u.hostname === "raw.githubusercontent.com"
+          ? new Response("apps: []")
+          : Response.json({ status: "degraded", version: "sha-1234567" }, { status: 503 }),
+      );
+      await post();
+      const [row] = await sql`select status, health from app where n = 17`;
+      expect([row.status, row.health]).toEqual(["building", "degraded"]);
     });
 
     it("a public sslip.io name is allowed", async () => {

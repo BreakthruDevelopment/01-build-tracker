@@ -13,11 +13,12 @@ const httpsUrl = z
   .max(500)
   .refine((v) => {
     try {
-      return new URL(v).protocol === "https:";
+      const u = new URL(v);
+      return u.protocol === "https:" && u.hostname === "github.com";
     } catch {
       return false;
     }
-  }, "url must be https");
+  }, "url must be an https://github.com link");
 
 const appReport = z
   .object({
@@ -45,7 +46,7 @@ const appReport = z
 
 export const ingestReport = z.object({
   reported_at: z.iso.datetime({ offset: true }),
-  apps: z.array(appReport).max(30),
+  apps: z.array(appReport).max(30).default([]),
   clouds: z
     .array(
       z.object({
@@ -61,7 +62,8 @@ export const ingestReport = z.object({
           .max(50),
       }),
     )
-    .max(8),
+    .max(8)
+    .default([]),
   summary: z.string().max(500).optional(),
 });
 
@@ -69,7 +71,9 @@ export type IngestReport = z.infer<typeof ingestReport>;
 
 function clip(text: string, max = 200): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
+  // Slice by code point so an emoji is never cut in half.
+  const chars = Array.from(oneLine);
+  return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : oneLine;
 }
 
 export async function applyIngest(input: unknown) {

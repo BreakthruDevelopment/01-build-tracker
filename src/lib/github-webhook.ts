@@ -77,7 +77,9 @@ function when(value: string | null | undefined): Date {
 
 function clip(text: string, max = 200): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
+  // Slice by code point so an emoji is never cut in half.
+  const chars = Array.from(oneLine);
+  return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : oneLine;
 }
 
 /** The app whose `repo` matches `owner/name`, or null for other owners and unknown repos. */

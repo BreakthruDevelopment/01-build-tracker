@@ -155,7 +155,6 @@ export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promis
     }
     const { text } = await readCapped(res, HEALTH_MAX_BYTES);
     const ms = Date.now() - started;
-    if (res.status !== 200) return { kind: "checked", health: "down", version: null, ms };
     let body: { status?: unknown; version?: unknown } = {};
     try {
       const parsed: unknown = JSON.parse(text);
@@ -164,9 +163,18 @@ export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promis
       // A 200 that isn't JSON is up but not trustworthy: degraded.
     }
     const version = typeof body.version === "string" ? body.version.slice(0, 100) : null;
+    if (res.status !== 200) {
+      // The template's /api/health answers 503 + status "degraded" when its database is down:
+      // the app itself is up, so that's degraded rather than down.
+      const health = body.status === "degraded" ? "degraded" : "down";
+      return { kind: "checked", health, version, ms };
+    }
     return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, ms };
   } catch (err) {
     if (err instanceof BlockedError) return { kind: "skipped", reason: "private_address" };
+    // No DNS record yet (an app still being set up) says nothing about the app's health.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "ENOTFOUND" || code === "ENODATA") return { kind: "skipped", reason: "dns_not_found" };
     if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline" };
     return { kind: "checked", health: "down", version: null, ms: Date.now() - started };
   }

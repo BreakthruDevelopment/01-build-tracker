@@ -1,4 +1,4 @@
-import { UnauthorizedError } from "@/lib/auth/rbac";
+import { ForbiddenError, UnauthorizedError } from "@/lib/auth/rbac";
 import { requireRole } from "@/lib/auth/session";
 import { env } from "@/lib/env";
 import { NotConfiguredError, UnauthorizedTokenError } from "@/lib/errors";
@@ -29,6 +29,10 @@ export async function POST(request: Request) {
         if (err instanceof UnauthorizedError && !secret) throw new NotConfiguredError();
         throw err;
       }
+      // Session path: other *.breakthruventures.ai apps count as same-site, so Lax cookies alone
+      // don't stop them posting here with the admin's session. Require our own Origin.
+      const origin = request.headers.get("origin");
+      if (origin !== new URL(env().APP_URL).origin) throw new ForbiddenError("Cross-origin request refused.");
     }
     return Response.json(await runSync());
   } catch (err) {

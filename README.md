@@ -57,10 +57,10 @@ stored in the `tracker_state` table (`last_sync`, `last_ingest`) for `/admin`.
 | Field | Rules |
 | --- | --- |
 | `reported_at` | ISO 8601 with offset or `Z`. Future times are clamped to now |
-| `apps` | Up to 30. Each needs `n` (1 to 30) or `repo` (the catalog repo name, case-insensitive); unknown apps are skipped and counted |
-| `apps[].ci` | `conclusion` (1-40 chars), `workflow` (1-100), optional https `url`. Written as an `ops_monitor` event and, if newer than the stored result, to the app's CI columns |
+| `apps` | Optional, defaults to empty. Up to 30. Each needs `n` (1 to 30) or `repo` (the catalog repo name, case-insensitive); unknown apps are skipped and counted |
+| `apps[].ci` | `conclusion` (1-40 chars), `workflow` (1-100), optional `url` (must be an `https://github.com` link). Written as an `ops_monitor` event and, if newer than the stored result, to the app's CI columns |
 | `apps[].stalled[]` | Up to 10: `kind` (1-40), `detail` (1-200), optional `hours` (0 or more). Each becomes an `ops_monitor` event `stalled.<kind>` |
-| `clouds[]` | Up to 8: `cloud` is `aws`, `azure`, `gcp` or `oci`; up to 50 `metrics`, each `metric` (1-100 chars), `used_pct` (0 to 100; rounded), `charge_cents` (integer, 0 or more). Each metric is a new `cloud_usage` row |
+| `clouds[]` | Optional, defaults to empty. Up to 8: `cloud` is `aws`, `azure`, `gcp` or `oci`; up to 50 `metrics`, each `metric` (1-100 chars), `used_pct` (0 to 100; rounded), `charge_cents` (integer, 0 or more). Each metric is a new `cloud_usage` row |
 | `summary` | Optional, up to 500 chars; stored with the last-ingest time |
 
 Response: `200 {"ok":true,"apps":N,"skipped":N,"events":N,"cloud_usage":N}`. Invalid shape: `400` with the list of
