@@ -50,3 +50,25 @@ describe("toRole", () => {
     expect(toRole("user, admin")).toBe("admin");
   });
 });
+
+describe("manage and strict ownership", () => {
+  it("lets only admins manage", () => {
+    expect(can(admin, "manage")).toBe(true);
+    expect(can(alice, "manage")).toBe(false);
+  });
+
+  it("strict refuses anyone but the owner, admins included", () => {
+    expect(can(admin, "delete", { ownerId: "alice", strict: true })).toBe(false);
+    expect(can(alice, "delete", { ownerId: "alice", strict: true })).toBe(true);
+  });
+
+  it("strict still applies the role rules to the owner", () => {
+    expect(can(alice, "manage", { ownerId: "alice", strict: true })).toBe(false);
+    expect(can(admin, "manage", { ownerId: "root", strict: true })).toBe(true);
+  });
+
+  it("leaves the existing rules unchanged", () => {
+    expect(can(bob, "update", { ownerId: "alice" })).toBe(false);
+    expect(can(admin, "delete", { ownerId: "alice" })).toBe(true);
+  });
+});

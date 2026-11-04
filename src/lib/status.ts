@@ -49,8 +49,9 @@ export function canTransition(
 ): boolean {
   if (from === "blocked") {
     if (actor !== "admin") return false;
-    if (blockedFrom) return to === blockedFrom && (RESTORABLE as readonly Status[]).includes(to);
-    return (RESTORABLE as readonly Status[]).includes(to);
+    // Only back to the state stored when it was blocked; without one, nothing is allowed.
+    if (!blockedFrom) return false;
+    return to === blockedFrom && (RESTORABLE as readonly Status[]).includes(to);
   }
   const rule = RULES[from]?.[to];
   return !!rule && rule.actors.includes(actor);

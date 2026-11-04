@@ -30,7 +30,8 @@ export function toRole(value: string | null | undefined): Role {
 }
 
 export function can(actor: Actor, action: Action, resource?: Owned): boolean {
-  if (resource?.strict) return resource.ownerId === actor.id;
+  // Strict ownership: only the owner, whatever their role. Fails closed, then the normal rules apply.
+  if (resource?.strict && resource.ownerId !== actor.id) return false;
   if (action === "manage") return actor.role === "admin";
   if (actor.role === "admin") return true;
   if (action === "create") return true;

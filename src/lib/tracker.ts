@@ -19,7 +19,10 @@ import { canTransition, requiresReason, STATUSES, type Status } from "@/lib/stat
 // ---------------------------------------------------------------------------
 
 /** App numbers are 1..30 in the seed; a valid-looking number with no row is a 404, not a 400. */
-export const appNumber = z.coerce.number().int().min(1).max(1_000_000);
+export const appNumber = z.union([
+  z.number().int(),
+  z.string().regex(/^\d{1,7}$/, "App number must be digits").transform(Number),
+]).pipe(z.number().int().min(1).max(1_000_000));
 
 export const transitionInput = z.object({
   to: z.enum(STATUSES),

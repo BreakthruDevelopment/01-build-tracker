@@ -21,9 +21,7 @@ describe("canTransition: full matrix without blocked_from", () => {
       for (const actor of ACTORS) {
         const key = `${from}>${to}`;
         const expected =
-          from === "blocked"
-            ? actor === "admin" && ["planned", "building", "live"].includes(to)
-            : (ALLOWED[key] ?? []).includes(actor);
+          from === "blocked" ? false : (ALLOWED[key] ?? []).includes(actor);
         it(`${actor}: ${from} -> ${to} is ${expected ? "allowed" : "rejected"}`, () => {
           expect(canTransition(from, to, actor)).toBe(expected);
         });

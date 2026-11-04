@@ -2,8 +2,6 @@
  * Runs against a real Postgres when TEST_DATABASE_URL is set (CI provides one).
  * Proves the Build Tracker access rules and state machine hold at the data layer.
  */
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { errorInfo } from "@/lib/http";
@@ -28,7 +26,6 @@ describe.skipIf(!url)("tracker data layer (Postgres)", () => {
     process.env.DATABASE_URL = url;
     process.env.BETTER_AUTH_SECRET ??= "x".repeat(32);
     sql = postgres(url!, { max: 1 });
-    await migrate(drizzle(sql), { migrationsFolder: "./drizzle" });
     await sql`delete from "user" where id like 'tr-%'`;
     for (const u of [admin, admin2, plainUser]) {
       await sql`insert into "user" (id, name, email, role) values (${u.id}, ${u.id}, ${u.id + "@secret-test.local"}, ${u.role})`;
