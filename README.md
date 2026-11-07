@@ -229,6 +229,30 @@ To make yourself an admin, sign up first, then (while the app is running):
 SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=your-secure-password pnpm db:seed
 ```
 
+## Design system
+
+Every app shares the Breakthru look (guide and concept: `ai-dev-os/design/`). Tokens live in `src/app/globals.css`
+(light and dark; use `bg-surface`, `text-muted`, `border-border`, `bg-accent` and the status tokens, never raw colors).
+Fonts load through `next/font/google` in `src/app/layout.tsx`: Newsreader (`font-display`), Public Sans (`font-sans`),
+IBM Plex Mono (`font-mono`). Set the app's name once in `src/lib/app-config.ts` (`APP_TITLE`, or the `APP_NAME` variable).
+
+| Component | Location | Use |
+| --- | --- | --- |
+| `AppShell` | `src/components/app-shell.tsx` | Header (logo, app name, nav, sign in or user and sign out) and footer; wraps every page in the root layout |
+| `PageIntro` | `src/components/ui/` | Eyebrow, Newsreader headline, one-line description, actions |
+| `StatTile`, `StatGrid` | `src/components/ui/` | A number and a label; tiles stack at 375px |
+| `FilterBar` | `src/components/ui/` | Search, select filters, sort and table/cards toggle as a GET form (state in the URL) |
+| `StatusBadge` | `src/components/ui/` | Live, building, blocked, not started (neutral), healthy, degraded, down |
+| `DataList` | `src/components/ui/` | Table from 640px, cards below |
+| `Panel` | `src/components/ui/` | Titled panel; `collapsible` adds a "Show all" toggle (small client component) |
+| `DemoBadge` | `src/components/ui/` | "Demo data" label for seeded or demo content |
+
+The header links come from `NAV_LINKS` in `src/lib/app-config.ts`; each app must edit that list (the template's
+`/dashboard` and `/admin` links break if the app deletes those pages).
+
+Shared button and field classes are in `src/components/ui/styles.ts` (44px minimum height). Don't add `loading.tsx` or
+`<Suspense>` above a page that calls `requireRoleOrRedirect()` or `notFound()`.
+
 ## Checks
 
 ```bash
