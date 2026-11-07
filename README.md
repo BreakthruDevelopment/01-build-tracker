@@ -258,7 +258,7 @@ of admin status changes. It does not create notes.
 
 ## 2-minute demo script
 
-_The board pages arrive with issue #5; until then the API above can be demoed with `curl`._
+The board is at `/`, each app at `/apps/1` through `/apps/30`, with admin controls on each app page and config and sync at `/admin` once you sign in as an admin.
 
 1. **Open the Public Board (`/`):**
    Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: cards for all 30 apps, status chips (`planned`, `building`, `live`, `shipped`), health indicators, and filter buttons. Show that the view works responsively on mobile (375px) without horizontal scrolling.
