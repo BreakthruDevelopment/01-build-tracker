@@ -14,6 +14,7 @@
   --accent-foreground: #ffffff;
   --danger: #b42318;
   --success: #1f7a4d;
+  --warning: #7a4e0d;
   --radius: 10px;
 }
 
@@ -28,6 +29,7 @@
     --accent-foreground: #0d1220;
     --danger: #f97066;
     --success: #4fbf86;
+    --warning: #f0c36a;
   }
 }
 
@@ -41,6 +43,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-danger: var(--danger);
   --color-success: var(--success);
+  --color-warning: var(--warning);
   --radius-card: var(--radius);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
