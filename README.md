@@ -241,6 +241,21 @@ pnpm build && pnpm smoke                   # build, then the end-to-end smoke te
 
 The application image runs across AWS, Azure, Google Cloud, and Oracle Cloud. Infrastructure and deploy automation are managed through Terraform in [BreakthruDevelopment/30-apps-infra](https://github.com/BreakthruDevelopment/30-apps-infra). Secret values come from AWS Parameter Store (see that repo's "Per-app secrets").
 
+## Demo data
+
+To design or demo the board with a full screen, fill a **non-production** database with realistic sample
+state for all 30 apps (statuses, health, CI, events, status history, today's summaries, cloud usage):
+
+```bash
+DATABASE_URL=postgres://... APP_URL=http://localhost:3000 DEMO_SEED=yes pnpm seed:demo
+```
+
+The data is deterministic (seeded PRNG), and running it again resets the demo state. It refuses to run
+without `DEMO_SEED=yes`, when `APP_URL` points at the production tracker, or when the database already
+holds real GitHub events (override with `--force`). Demo rows are marked: event `delivery_id` starts with
+`demo-`, summaries have `model = 'demo-seed'`. It adds one login-less user, `demo-seed-admin`, as the actor
+of admin status changes. It does not create notes.
+
 ## 2-minute demo script
 
 _The board pages arrive with issue #5; until then the API above can be demoed with `curl`._
