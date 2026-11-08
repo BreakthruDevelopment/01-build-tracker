@@ -21,6 +21,9 @@ import { listBoard, type BoardApp } from "@/lib/tracker";
 export const metadata: Metadata = { title: "Board" };
 export const dynamic = "force-dynamic";
 
+// Tab order follows the approved concept: what's live first, the backlog last.
+const STATUS_TAB_ORDER: Status[] = ["live", "shipped", "building", "blocked", "planned"];
+
 export default async function Home({ searchParams }: { searchParams: Promise<BoardQuery> }) {
   const options = boardOptions(await searchParams);
   const apps = await listBoard();
@@ -33,7 +36,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Boa
   const planned = shown.filter((app) => app.status === "planned");
   const filters = [
     { status: null, label: "All", count: apps.length },
-    ...STATUSES.map((status) => ({
+    ...STATUS_TAB_ORDER.map((status) => ({
       status,
       label: statusLabel(status),
       count: counts[status],
@@ -214,7 +217,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Boa
         count={planned.length}
         collapsible
         defaultOpen={false}
-        closedLabel={`Show ${planned.length} more`}
+        closedLabel={`Show all ${planned.length}`}
         openLabel="Hide backlog"
       >
         <DataList

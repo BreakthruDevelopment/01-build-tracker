@@ -288,7 +288,7 @@ of admin status changes. It does not create notes.
 The board is at `/`, each app at `/apps/1` through `/apps/30`, with admin controls on each app page and config and sync at `/admin` once you sign in as an admin.
 
 1. **Open the Public Board (`/`):**
-   Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: cards for all 30 apps, status chips (`planned`, `building`, `live`, `shipped`), health indicators, and filter buttons. Show that the view works responsively on mobile (375px) without horizontal scrolling.
+   Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: the total, live, planned and blocked tiles, status tabs, the search, cloud and sort filters with a Table/Cards toggle, the Active apps panel with health, CI and the latest AI summary, and the planned backlog, collapsed by default. Show that the view works responsively on mobile (375px) without horizontal scrolling.
 2. **Inspect an App Detail Page (`/apps/1`):**
    Open the **Portfolio Build Tracker** row (or card in Cards view). View its live health status, recent GitHub events (pushes, pull requests, CI runs), and today's AI-generated morning health note. Note that signed-out visitors see no administrative edit controls.
 3. **Sign In as Admin (`/sign-in`):**
