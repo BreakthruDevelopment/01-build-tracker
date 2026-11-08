@@ -12,7 +12,9 @@ export const MAX_PROMPT_CHARS = 12_000;
 
 // Model names change often; set AI_MODEL per app and confirm it on Day 0.
 const DEFAULT_MODELS = {
-  gemini: "gemini-flash-latest",
+  // The lighter alias: faster and more free-tier headroom; the full Flash alias timed out or 503'd
+  // on 600-token JSON answers in app 2's first live deploy.
+  gemini: "gemini-flash-lite-latest",
   anthropic: "claude-haiku-5-5",
 } as const;
 
@@ -80,7 +82,8 @@ export async function generate<T>(req: GenerateRequest<T>): Promise<GenerateResu
     return finish(raw, provider.name, provider.model, false);
   } catch (err) {
     const kind = err instanceof AiError ? err.kind : "provider";
-    log.warn("ai.generate.failed", { task: req.task, provider: provider.name, kind });
+    const status = err instanceof AiError ? err.status : undefined;
+    log.warn("ai.generate.failed", { task: req.task, provider: provider.name, model: provider.model, kind, status });
     if (e.AI_FALLBACK_TO_DEMO && kind !== "input_rejected") {
       return finish(demoAnswer(req.task), "demo", "recorded", true);
     }

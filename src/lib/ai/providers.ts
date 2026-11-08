@@ -1,19 +1,45 @@
 import { env } from "@/lib/env";
 import { type AiProvider, AiError } from "./types";
 
+async function postOnce(url: string, headers: Record<string, string>, body: unknown, deadline: number) {
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    });
+  } catch (err) {
+    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+      throw new AiError("Model provider timed out", "provider", "timeout");
+    }
+    throw new AiError("Model provider unreachable", "provider");
+  }
+}
+
 async function post(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(env().AI_TIMEOUT_MS),
-  });
-  if (res.status === 429) throw new AiError("Model quota reached", "quota");
+  const deadline = Date.now() + env().AI_TIMEOUT_MS;
+  let res = await postOnce(url, headers, body, deadline);
+  // Free-tier models are often briefly overloaded: retry a 500/503 once if there's time left.
+  if ((res.status === 500 || res.status === 503) && deadline - Date.now() > 3000) {
+    await new Promise((r) => setTimeout(r, 400));
+    res = await postOnce(url, headers, body, deadline);
+  }
+  if (res.status === 429) throw new AiError("Model quota reached", "quota", 429);
   if (!res.ok) {
     // Never echo the response body: it can contain request details.
-    throw new AiError(`Model provider returned HTTP ${res.status}`, "provider");
+    throw new AiError(`Model provider returned HTTP ${res.status}`, "provider", res.status);
   }
   return res.json();
+}
+
+/**
+ * Gemini 3-generation models (and the -latest aliases) think before answering, and thinking tokens
+ * count against maxOutputTokens and add seconds. "low" is accepted by every Flash model and alias
+ * ("minimal" is rejected by gemini-flash-latest). 2.5 models use a different setting, so they get none.
+ */
+export function geminiThinkingConfig(model: string): { thinkingLevel: "low" } | undefined {
+  return /^gemini-(3|flash|flash-lite|pro)(-|\.|$)/.test(model) ? { thinkingLevel: "low" } : undefined;
 }
 
 /** Google Gemini API (free tier via Google AI Studio). */
@@ -28,7 +54,11 @@ export function geminiProvider(apiKey: string, model: string): AiProvider {
         {
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json", maxOutputTokens },
+          generationConfig: {
+            responseMimeType: "application/json",
+            maxOutputTokens,
+            ...(geminiThinkingConfig(model) ? { thinkingConfig: geminiThinkingConfig(model) } : {}),
+          },
         },
       )) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
       const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("");
