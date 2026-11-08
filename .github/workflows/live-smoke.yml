@@ -1,0 +1,26 @@
+name: Live smoke test
+
+# Runs scripts/smoke.sh against the deployed site. Start it from the Actions tab
+# (Run workflow) after a deploy, or push to a claude/live-smoke* branch.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Site to test
+        default: https://app1.breakthruventures.ai
+  push:
+    branches: ["claude/live-smoke*"]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test the live site
+        env:
+          BASE_URL: ${{ inputs.base_url || 'https://app1.breakthruventures.ai' }}
+        run: bash scripts/smoke.sh
