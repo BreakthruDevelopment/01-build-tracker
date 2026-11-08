@@ -67,7 +67,7 @@ Data is ingested through three external machine endpoints. Because the service d
    cloud resource utilization.
 3. **Scheduled Sync (`POST /api/sync`):**
    Triggered every 30 minutes by a GitHub Actions workflow using `SYNC_TOKEN`, or by a signed-in admin (same-origin requests only). Re-reads
-   `catalog.yaml` to sync names and cloud metadata, and polls active apps' `/api/health` (10 concurrently, 6s timeout,
+   `catalog.yaml` to sync names and cloud metadata, and polls active apps' `/api/health` (all concurrently; 6s first attempt, one retry of up to 13s for scale-to-zero cold starts,
    16 KB body limit). Auto-transitions verified apps from `building` to `live`.
 
 A machine endpoint whose secret is unset answers 503, so nothing is open by default. (One deliberate exception: a signed-in admin can run sync and summaries from the app itself before `SYNC_TOKEN` exists.)
@@ -104,7 +104,7 @@ Sync re-reads `catalog.yaml` (names, subdomains, clouds, repos; never status), t
 `app.health_url ?? https://<subdomain>/api/health` for every app that is not `planned`. Each URL is re-checked
 against the host allow-list, its DNS answers must all be public addresses (loopback, private, link-local,
 CGNAT, ULA and unspecified are refused, IPv4-mapped IPv6 included), redirects are not followed, and a
-check has 6 s and 16 KB. A refused check counts as `skipped`, not `down`. The last sync and ingest times are
+check has up to 6 s plus one 13 s retry, and 16 KB. A refused check counts as `skipped`, not `down`. The last sync and ingest times are
 stored in the `tracker_state` table (`last_sync`, `last_ingest`) for `/admin`.
 
 ### Ingest API (the ops monitor's nightly report)
@@ -184,7 +184,7 @@ AWS API Gateway ──► Lambda Web Adapter ──► Next.js container (App Ro
 
 - **Server-Side Authorization:** Public endpoints return strict projection types (excluding notes and user emails). State transitions, note creations, and sync executions require `requireRole("admin")` and `assertCan()`. Note deletion is restricted strictly to the note's original author.
 - **Timing-Safe Authentication:** HMAC signatures and bearer tokens are evaluated with constant-time equality checks. Unset tokens safely disable endpoints (503).
-- **SSRF Prevention:** Custom app `health_url` settings are restricted to HTTPS and checked against a host allow-list (`*.breakthruventures.ai`, `execute-api.us-east-2.amazonaws.com`, `azurecontainerapps.io`, `run.app`, `sslip.io`) when saved and again at fetch time. Every DNS answer must be a public address (private, loopback, link-local, CGNAT and ULA ranges are refused), redirects are not followed, and each check has 6 s and 16 KB.
+- **SSRF Prevention:** Custom app `health_url` settings are restricted to HTTPS and checked against a host allow-list (`*.breakthruventures.ai`, `execute-api.us-east-2.amazonaws.com`, `azurecontainerapps.io`, `run.app`, `sslip.io`) when saved and again at fetch time. Every DNS answer must be a public address (private, loopback, link-local, CGNAT and ULA ranges are refused), redirects are not followed, and each check has up to 6 s plus one 13 s retry and 16 KB.
 - **Same-origin admin actions:** sync and summary runs from an admin session must come from the app's own origin, so sibling apps on the same domain can't trigger them.
 - **Zero Secrets Committed:** Secret values are injected from cloud parameter stores or environment secrets; `.env.local` is ignored by git.
 

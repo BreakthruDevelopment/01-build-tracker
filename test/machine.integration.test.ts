@@ -496,17 +496,21 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       expect((await sql`select status from app where n = 13`)[0].status).toBe("live");
     });
 
-    it("a hanging health endpoint times out as down within the budget", async () => {
+    it("a hanging health endpoint is retried, then times out as down within the budget", async () => {
       await resetApps();
       await sql`update app set status = 'building' where n = 14`;
+      let healthCalls = 0;
       vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
         if (new URL(String(input)).hostname === "raw.githubusercontent.com") return Promise.resolve(new Response("apps: []"));
+        healthCalls++;
         return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
       });
       const started = Date.now();
       const body = await (await post()).json();
-      expect(Date.now() - started).toBeLessThan(10_000);
+      // 6 s first attempt + 0.5 s backoff + 13 s retry = 19.5 s, under the 21 s sync deadline.
+      expect(healthCalls).toBe(2);
+      expect(Date.now() - started).toBeLessThan(21_000);
       expect(body.health).toMatchObject({ checked: 1, down: 1 });
-    }, 15_000);
+    }, 25_000);
   });
 });

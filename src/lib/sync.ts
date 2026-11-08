@@ -14,11 +14,21 @@ import { systemTransition } from "@/lib/tracker";
 export const CATALOG_URL = "https://raw.githubusercontent.com/BreakthruDevelopment/ai-dev-os/main/catalog.yaml";
 const CATALOG_MAX_BYTES = 512 * 1024;
 const HEALTH_MAX_BYTES = 16 * 1024;
-const HEALTH_TIMEOUT_MS = 6000;
+/**
+ * Scale-to-zero apps (Azure Container Apps, Cloud Run) can need 10 s or more for the first request
+ * after idle. Attempt 1 (6 s) wakes the app; one retry (13 s) follows after a short backoff. Worst case is
+ * 6 + 0.5 + 13 = 19.5 s, inside the sync deadline. Catalog sync runs concurrently, so it doesn't eat into it.
+ */
+const HEALTH_ATTEMPT_TIMEOUTS_MS = [6000, 13000];
+const HEALTH_BACKOFF_MS = [500];
 const CATALOG_TIMEOUT_MS = 4000;
-/** The whole sync must finish well inside the 20 s handler budget (Lambda allows 29 s). */
-const SYNC_DEADLINE_MS = 17000;
-const CONCURRENCY = 10;
+/**
+ * Platform limits: Lambda 29 s and API Gateway / the workflow's curl 30 s, both including startup
+ * (maxDuration is 25 s but does nothing on Lambda). 21 s leaves a few seconds to record results.
+ */
+const SYNC_DEADLINE_MS = 21000;
+/** The catalog has at most 30 apps; check them all at once so cold apps don't queue behind each other. */
+const CONCURRENCY = 30;
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -117,8 +127,12 @@ function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** Resolve every address for the host and require all of them to be public. */
-async function assertPublicHost(hostname: string, signal: AbortSignal): Promise<void> {
-  const addresses = await raceSignal(lookup(hostname, { all: true, verbatim: true }), signal);
+async function assertPublicHost(
+  hostname: string,
+  signal: AbortSignal,
+  resolve: (h: string) => Promise<{ address: string }[]> = (h) => lookup(h, { all: true, verbatim: true }),
+): Promise<void> {
+  const addresses = await raceSignal(resolve(hostname), signal);
   if (addresses.length === 0 || !addresses.every((a) => isPublicIp(a.address))) {
     throw new BlockedError("address");
   }
@@ -130,20 +144,71 @@ class BlockedError extends Error {
   }
 }
 
+export interface HealthDeps {
+  fetch?: typeof fetch;
+  lookup?: (hostname: string) => Promise<{ address: string }[]>;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  attemptTimeoutsMs?: number[];
+  backoffMs?: number[];
+}
+
+function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    if (signal.aborted) return done();
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * Health check tolerant of cold starts: an attempt that throws (connection error, timeout) or answers
+ * 5xx without a "degraded" body is retried after a backoff. 4xx, redirects and refused hosts are not.
+ * The app is reported down only when every attempt fails; a success reports the latency of that attempt only.
+ */
+export async function checkHealth(
+  rawUrl: string,
+  deadline: AbortSignal,
+  deps: HealthDeps = {},
+  appN?: number,
+): Promise<HealthResult> {
+  const timeouts = deps.attemptTimeoutsMs ?? HEALTH_ATTEMPT_TIMEOUTS_MS;
+  const backoff = deps.backoffMs ?? HEALTH_BACKOFF_MS;
+  const sleep = deps.sleep ?? defaultSleep;
+  let { retryable, ...result } = await checkHealthOnce(rawUrl, deadline, timeouts[0] ?? 6000, deps);
+  for (let i = 1; i < timeouts.length && retryable; i++) {
+    // The last real answer beats a skip: a real 5xx followed by the deadline is still a failure.
+    if (deadline.aborted) return result;
+    log.info("sync.health_retry", { n: appN ?? null, attempt: i + 1 });
+    await sleep(backoff[i - 1] ?? 500, deadline);
+    if (deadline.aborted) return result;
+    const next = await checkHealthOnce(rawUrl, deadline, timeouts[i], deps);
+    if (next.kind === "skipped" && next.reason === "sync_deadline") return result;
+    ({ retryable, ...result } = next);
+  }
+  return result;
+}
+
 /**
  * One guarded health check (issue 2 SSRF review): re-validate the URL against the allow-list,
- * refuse private/loopback/link-local resolutions, never follow redirects, cap time and size.
- * A residual DNS-rebinding window exists between our lookup and fetch's own; the allow-listed
+ * refuse private/loopback/link-local resolutions (on every attempt), never follow redirects, cap time
+ * and size. A residual DNS-rebinding window exists between our lookup and fetch's own; the allow-listed
  * suffixes are either ours or deterministic/public hosting, which keeps that acceptable.
  */
-export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promise<HealthResult> {
+type Attempt = HealthResult & { retryable: boolean };
+
+async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs: number, deps: HealthDeps): Promise<Attempt> {
   const url = parseHealthUrl(rawUrl);
-  if (!url) return { kind: "skipped", reason: "url_not_allowed" };
-  const signal = AbortSignal.any([AbortSignal.timeout(HEALTH_TIMEOUT_MS), deadline]);
+  if (!url) return { kind: "skipped", reason: "url_not_allowed", retryable: false };
+  const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), deadline]);
   const started = Date.now();
   try {
-    await assertPublicHost(new URL(url).hostname, signal);
-    const res = await fetch(url, {
+    await assertPublicHost(new URL(url).hostname, signal, deps.lookup);
+    const res = await (deps.fetch ?? fetch)(url, {
       redirect: "manual",
       cache: "no-store",
       signal,
@@ -151,7 +216,7 @@ export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promis
     });
     if (res.status >= 300 && res.status < 400) {
       await res.body?.cancel().catch(() => undefined);
-      return { kind: "skipped", reason: "redirect_refused" };
+      return { kind: "skipped", reason: "redirect_refused", retryable: false };
     }
     const { text } = await readCapped(res, HEALTH_MAX_BYTES);
     const ms = Date.now() - started;
@@ -167,16 +232,16 @@ export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promis
       // The template's /api/health answers 503 + status "degraded" when its database is down:
       // the app itself is up, so that's degraded rather than down.
       const health = body.status === "degraded" ? "degraded" : "down";
-      return { kind: "checked", health, version, ms };
+      return { kind: "checked", health, version, ms, retryable: health === "down" && res.status >= 500 };
     }
-    return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, ms };
+    return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, ms, retryable: false };
   } catch (err) {
-    if (err instanceof BlockedError) return { kind: "skipped", reason: "private_address" };
+    if (err instanceof BlockedError) return { kind: "skipped", reason: "private_address", retryable: false };
     // No DNS record yet (an app still being set up) says nothing about the app's health.
     const code = (err as { code?: unknown } | null)?.code;
-    if (code === "ENOTFOUND" || code === "ENODATA") return { kind: "skipped", reason: "dns_not_found" };
-    if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline" };
-    return { kind: "checked", health: "down", version: null, ms: Date.now() - started };
+    if (code === "ENOTFOUND" || code === "ENODATA") return { kind: "skipped", reason: "dns_not_found", retryable: false };
+    if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline", retryable: false };
+    return { kind: "checked", health: "down", version: null, ms: Date.now() - started, retryable: true };
   }
 }
 
@@ -188,7 +253,7 @@ async function pollApps(deadline: AbortSignal) {
   async function worker() {
     for (let a = queue.shift(); a; a = queue.shift()) {
       const target = a.healthUrl ?? `https://${a.subdomain}/api/health`;
-      const result = await checkHealth(target, deadline);
+      const result = await checkHealth(target, deadline, {}, a.n);
       if (result.kind === "skipped") {
         summary.skipped++;
         log.warn("sync.health_skipped", { n: a.n, reason: result.reason });
@@ -239,8 +304,9 @@ async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult
 export async function runSync() {
   const deadline = AbortSignal.timeout(SYNC_DEADLINE_MS);
   const started = Date.now();
-  const catalog = await syncCatalog(deadline);
-  const health = await pollApps(deadline);
+  // Concurrent, so a slow catalog fetch doesn't shorten the health budget. Health polls the apps already
+  // in the database; a newly added app is first checked on the next sync.
+  const [catalog, health] = await Promise.all([syncCatalog(deadline), pollApps(deadline)]);
   const result = { catalog, health };
   await setTrackerState("last_sync", { ...result, ms: Date.now() - started });
   log.info("sync.done", { ...result, ms: Date.now() - started });
