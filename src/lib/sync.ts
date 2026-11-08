@@ -14,11 +14,21 @@ import { systemTransition } from "@/lib/tracker";
 export const CATALOG_URL = "https://raw.githubusercontent.com/BreakthruDevelopment/ai-dev-os/main/catalog.yaml";
 const CATALOG_MAX_BYTES = 512 * 1024;
 const HEALTH_MAX_BYTES = 16 * 1024;
-const HEALTH_TIMEOUT_MS = 6000;
+/**
+ * Scale-to-zero apps (Azure Container Apps, Cloud Run) can need 10 s or more for the first request
+ * after idle. Attempt 1 wakes the app; up to two retries follow after a short backoff. Worst case is
+ * 6 + 0.3 + 5 + 0.7 + 4 = 16 s, which fits after the catalog fetch (4 s) inside the sync deadline.
+ */
+const HEALTH_ATTEMPT_TIMEOUTS_MS = [6000, 5000, 4000];
+const HEALTH_BACKOFF_MS = [300, 700];
 const CATALOG_TIMEOUT_MS = 4000;
-/** The whole sync must finish well inside the 20 s handler budget (Lambda allows 29 s). */
-const SYNC_DEADLINE_MS = 17000;
-const CONCURRENCY = 10;
+/**
+ * Health polling must finish inside the route's maxDuration (25 s; Lambda allows 29 s and the workflow's
+ * curl waits 30 s), leaving a few seconds to record results.
+ */
+const SYNC_DEADLINE_MS = 21000;
+/** The catalog has at most 30 apps; check them all at once so cold apps don't queue behind each other. */
+const CONCURRENCY = 30;
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -117,8 +127,12 @@ function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** Resolve every address for the host and require all of them to be public. */
-async function assertPublicHost(hostname: string, signal: AbortSignal): Promise<void> {
-  const addresses = await raceSignal(lookup(hostname, { all: true, verbatim: true }), signal);
+async function assertPublicHost(
+  hostname: string,
+  signal: AbortSignal,
+  resolve: (h: string) => Promise<{ address: string }[]> = (h) => lookup(h, { all: true, verbatim: true }),
+): Promise<void> {
+  const addresses = await raceSignal(resolve(hostname), signal);
   if (addresses.length === 0 || !addresses.every((a) => isPublicIp(a.address))) {
     throw new BlockedError("address");
   }
@@ -136,14 +150,56 @@ class BlockedError extends Error {
  * A residual DNS-rebinding window exists between our lookup and fetch's own; the allow-listed
  * suffixes are either ours or deterministic/public hosting, which keeps that acceptable.
  */
-export async function checkHealth(rawUrl: string, deadline: AbortSignal): Promise<HealthResult> {
+export interface HealthDeps {
+  fetch?: typeof fetch;
+  lookup?: (hostname: string) => Promise<{ address: string }[]>;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  attemptTimeoutsMs?: number[];
+  backoffMs?: number[];
+}
+
+function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    if (signal.aborted) return done();
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * Health check tolerant of cold starts: a failed or timed-out attempt (connection error, timeout or a
+ * non-degraded non-200 such as the 502/503 a waking container answers) is retried with backoff. The app
+ * is reported down only when every attempt fails; a success reports the latency of that attempt only.
+ */
+export async function checkHealth(rawUrl: string, deadline: AbortSignal, deps: HealthDeps = {}): Promise<HealthResult> {
+  const timeouts = deps.attemptTimeoutsMs ?? HEALTH_ATTEMPT_TIMEOUTS_MS;
+  const backoff = deps.backoffMs ?? HEALTH_BACKOFF_MS;
+  const sleep = deps.sleep ?? defaultSleep;
+  let result = await checkHealthOnce(rawUrl, deadline, timeouts[0] ?? 6000, deps);
+  for (let i = 1; i < timeouts.length; i++) {
+    if (result.kind !== "checked" || result.health !== "down") return result;
+    if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline" };
+    log.info("sync.health_retry", { attempt: i + 1 });
+    await sleep(backoff[i - 1] ?? 500, deadline);
+    if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline" };
+    result = await checkHealthOnce(rawUrl, deadline, timeouts[i], deps);
+  }
+  return result;
+}
+
+async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs: number, deps: HealthDeps): Promise<HealthResult> {
   const url = parseHealthUrl(rawUrl);
   if (!url) return { kind: "skipped", reason: "url_not_allowed" };
-  const signal = AbortSignal.any([AbortSignal.timeout(HEALTH_TIMEOUT_MS), deadline]);
+  const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), deadline]);
   const started = Date.now();
   try {
-    await assertPublicHost(new URL(url).hostname, signal);
-    const res = await fetch(url, {
+    await assertPublicHost(new URL(url).hostname, signal, deps.lookup);
+    const res = await (deps.fetch ?? fetch)(url, {
       redirect: "manual",
       cache: "no-store",
       signal,
