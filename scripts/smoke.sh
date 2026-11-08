@@ -16,6 +16,21 @@ health=$(curl -fsS "$BASE_URL/api/health") || fail "health endpoint unreachable"
 echo "$health" | grep -q '"status":"ok"' || fail "health not ok: $health"
 pass "health check"
 
+for path in / /sign-in; do
+  page=$(curl -fsS "$BASE_URL$path") || fail "page $path did not render"
+  echo "$page" | grep -q 'Explore breakthruventures.ai' || fail "page $path is missing the shared footer"
+done
+pass "pages render inside the shared shell"
+
+for path in /admin; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$path")
+  [ "$code" = "307" ] || fail "signed-out $path should redirect (307), got $code"
+done
+pass "signed-out admin redirects"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/apps/999")
+[ "$code" = "404" ] || fail "unknown app should return 404, got $code"
+pass "unknown app returns 404"
+
 signup() {
   local jar=$1 email=$2
   curl -fsS -c "$jar" -b "$jar" -H 'content-type: application/json' -H "origin: $BASE_URL" \

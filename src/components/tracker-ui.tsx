@@ -1,70 +1,43 @@
 import type { ReactNode } from "react";
+import { StatusBadge, type Status as BadgeStatus } from "@/components/ui/StatusBadge";
+export { DemoBadge } from "@/components/ui/DemoBadge";
 import type { Status } from "@/lib/status";
-import {
-  type ServiceHealth,
-  type SummaryTone,
-  formatRelative,
-  formatTimestamp,
-  healthLabel,
-  statusLabel,
-  summaryLabel,
-} from "@/lib/format";
+import { type ServiceHealth, type SummaryTone, formatRelative, formatTimestamp, statusLabel } from "@/lib/format";
 
-const STATUS_CLASS: Record<Status, string> = {
-  planned: "border-border bg-background text-muted",
-  building: "border-accent text-accent",
-  live: "border-success text-success",
-  shipped: "border-accent bg-accent text-accent-foreground",
-  blocked: "border-danger text-danger",
+const STATUS_BADGE: Record<Status, BadgeStatus> = {
+  planned: "not-started",
+  building: "building",
+  live: "live",
+  shipped: "shipped",
+  blocked: "blocked",
 };
-
-const HEALTH_DOT: Record<ServiceHealth, string> = {
-  ok: "bg-success",
-  degraded: "bg-warning",
-  down: "bg-danger",
-  unknown: "bg-muted",
-};
-
-const SUMMARY_CLASS: Record<SummaryTone, string> = {
-  green: "border-success text-success",
-  amber: "border-warning text-warning",
-  red: "border-danger text-danger",
+const HEALTH_BADGE: Record<ServiceHealth, BadgeStatus> = {
+  ok: "healthy",
+  degraded: "degraded",
+  down: "down",
+  unknown: "unknown",
 };
 
 export function StatusChip({ status }: { status: Status }) {
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_CLASS[status]}`}
-    >
-      {statusLabel(status)}
-    </span>
-  );
+  return <StatusBadge status={STATUS_BADGE[status]} label={statusLabel(status)} />;
 }
 
-/** Health as a dot and a word, so the color is never the only signal. */
 export function HealthMark({ health }: { health: ServiceHealth }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`inline-block size-2 shrink-0 rounded-full ${HEALTH_DOT[health]}`} aria-hidden="true" />
-      <span>Health {healthLabel(health)}</span>
-    </span>
-  );
+  return <StatusBadge status={HEALTH_BADGE[health]} />;
 }
 
 export function SummaryMark({ tone }: { tone: SummaryTone }) {
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${SUMMARY_CLASS[tone]}`}>
-      Summary {summaryLabel(tone)}
-    </span>
-  );
-}
-
-export function DemoBadge() {
-  return (
-    <span className="inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted">
-      Demo
-    </span>
-  );
+  const status = {
+    green: "healthy",
+    amber: "degraded",
+    red: "failed",
+  } as const;
+  const label = {
+    green: "Summary healthy",
+    amber: "Summary needs attention",
+    red: "Summary has issues",
+  };
+  return <StatusBadge status={status[tone]} label={label[tone]} />;
 }
 
 export function When({ at, now, empty }: { at: Date | null; now: Date; empty: string }) {
@@ -111,7 +84,7 @@ export function ExternalLink({ href, children, className }: { href: string; chil
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className={`relative z-10 break-all underline underline-offset-2 ${className ?? "text-accent"}`}
+      className={`relative z-10 inline-flex min-h-11 min-w-11 items-center break-all underline underline-offset-2 ${className ?? "text-accent"}`}
     >
       {children}
       <span className="sr-only"> (opens in a new tab)</span>

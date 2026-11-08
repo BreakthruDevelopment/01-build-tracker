@@ -1,6 +1,8 @@
 import { cache } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PageIntro, Panel } from "@/components/ui";
+import { buttonSecondary } from "@/components/ui/styles";
 import { notFound } from "next/navigation";
 import { ZodError } from "zod";
 import { AdminPanel, RegenerateButton, type NoteView } from "./admin-panel";
@@ -65,76 +67,74 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
 
   return (
     <div className="min-w-0 space-y-6">
-      <p>
-        <Link href="/" className="text-sm text-accent underline underline-offset-2">
-          All apps
-        </Link>
-      </p>
-      <header className="space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm text-muted">
-              {app.n} · {cloudLabel(app.liveCloud)} · <span className="break-all">{app.subdomain}</span>
-            </p>
-            <h1 className="break-words text-2xl font-semibold tracking-tight sm:text-3xl">{app.name}</h1>
-          </div>
-          <StatusChip status={app.status} />
-        </div>
+      <PageIntro
+        section={`App ${String(app.n).padStart(2, "0")} · ${cloudLabel(app.liveCloud)}`}
+        title={app.name}
+        description={app.subdomain}
+        actions={
+          <>
+            <Link href="/" className={buttonSecondary}>
+              Back to board
+            </Link>
+            <StatusChip status={app.status} />
+          </>
+        }
+      />
+      <div className="flex flex-wrap items-center gap-3 font-mono text-sm">
         {repo ? (
-          <p className="text-sm">
-            <ExternalLink href={repo}>{app.repo}</ExternalLink>
-          </p>
+          <ExternalLink href={repo}>{app.repo}</ExternalLink>
         ) : (
-          <p className="break-all text-sm text-muted">{app.repo}</p>
+          <span className="break-all text-muted">{app.repo}</span>
         )}
         {app.status === "blocked" && app.blockedFrom ? (
-          <p className="text-sm text-muted">Previous status: {statusLabel(app.blockedFrom)}</p>
+          <span className="text-muted">Previous status: {statusLabel(app.blockedFrom)}</span>
         ) : null}
-      </header>
+      </div>
 
-      <dl className="grid grid-cols-1 gap-3 rounded-card border border-border bg-surface p-4 text-sm sm:grid-cols-2">
-        <div className="min-w-0">
-          <dt className="text-xs text-muted">Health</dt>
-          <dd className="break-words">
-            <HealthMark health={app.health} />
-            {app.healthVersion ? <span className="mt-1 block break-all text-muted">Version {app.healthVersion}</span> : null}
-            {app.healthMs !== null ? <span className="mt-1 block text-muted">{app.healthMs} ms</span> : null}
-            {app.healthAt ? (
-              <span className="mt-1 block text-muted">
-                Checked <When at={app.healthAt} now={now} empty="not yet" />
-              </span>
-            ) : null}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-muted">CI</dt>
-          <dd className="break-words">
-            <CiResult conclusion={app.ciConclusion} workflow={app.ciWorkflow} href={ciHref} />
-            {app.ciAt ? (
-              <span className="mt-1 block text-muted">
-                <When at={app.ciAt} now={now} empty="No CI result" />
-              </span>
-            ) : null}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-muted">Last push</dt>
-          <dd>
-            <When at={app.lastPushAt} now={now} empty="No pushes yet" />
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-muted">In this status</dt>
-          <dd>
-            <When at={app.statusChangedAt} now={now} empty="Unknown" />
-          </dd>
-        </div>
-      </dl>
+      <Panel title="Service overview">
+        <dl className="grid grid-cols-1 gap-3 rounded-card border border-border bg-surface p-4 text-sm sm:grid-cols-2">
+          <div className="min-w-0">
+            <dt className="text-xs text-muted">Health</dt>
+            <dd className="break-words">
+              <HealthMark health={app.health} />
+              {app.healthVersion ? (
+                <span className="mt-1 block break-all text-muted">Version {app.healthVersion}</span>
+              ) : null}
+              {app.healthMs !== null ? <span className="mt-1 block text-muted">{app.healthMs} ms</span> : null}
+              {app.healthAt ? (
+                <span className="mt-1 block text-muted">
+                  Checked <When at={app.healthAt} now={now} empty="not yet" />
+                </span>
+              ) : null}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted">CI</dt>
+            <dd className="break-words">
+              <CiResult conclusion={app.ciConclusion} workflow={app.ciWorkflow} href={ciHref} />
+              {app.ciAt ? (
+                <span className="mt-1 block text-muted">
+                  <When at={app.ciAt} now={now} empty="No CI result" />
+                </span>
+              ) : null}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted">Last push</dt>
+            <dd>
+              <When at={app.lastPushAt} now={now} empty="No pushes yet" />
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted">In this status</dt>
+            <dd>
+              <When at={app.statusChangedAt} now={now} empty="Unknown" />
+            </dd>
+          </div>
+        </dl>
+      </Panel>
 
-      <section className="min-w-0 space-y-3" aria-labelledby="summary-heading">
-        <h2 id="summary-heading" className="text-lg font-semibold tracking-tight">
-          Today&apos;s summary
-        </h2>
+      <Panel id="summary-heading" title="Today's summary">
         {app.summary ? (
           <div className="space-y-3 rounded-card border border-border bg-surface p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -147,7 +147,10 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
             ) : (
               <ul className="space-y-2">
                 {app.summaryFlags.map((flag, index) => (
-                  <li key={`${flag.kind}-${index}`} className="min-w-0 break-words rounded-card border border-border bg-background px-3 py-2 text-sm">
+                  <li
+                    key={`${flag.kind}-${index}`}
+                    className="min-w-0 break-words rounded-card border border-border bg-background px-3 py-2 text-sm"
+                  >
                     <span className="font-medium">{flagLabel(flag.kind)}</span>
                     <span className="text-muted"> · {flag.detail}</span>
                   </li>
@@ -164,12 +167,9 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
           </div>
         )}
         {admin ? <RegenerateButton n={app.n} /> : null}
-      </section>
+      </Panel>
 
-      <section className="min-w-0 space-y-3" aria-labelledby="history-heading">
-        <h2 id="history-heading" className="text-lg font-semibold tracking-tight">
-          Status history
-        </h2>
+      <Panel id="history-heading" title="Status history">
         {app.history.length === 0 ? (
           <EmptyState title="No status changes yet" />
         ) : (
@@ -192,12 +192,9 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
           </ol>
         )}
         {app.history.length === 50 ? <p className="text-sm text-muted">Showing the latest 50 changes.</p> : null}
-      </section>
+      </Panel>
 
-      <section className="min-w-0 space-y-3" aria-labelledby="events-heading">
-        <h2 id="events-heading" className="text-lg font-semibold tracking-tight">
-          Recent events
-        </h2>
+      <Panel id="events-heading" title="Recent events">
         {app.events.length === 0 ? (
           <EmptyState title="No events yet" />
         ) : (
@@ -208,7 +205,8 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
                 <li key={event.id} className="min-w-0 space-y-1 rounded-card border border-border bg-surface p-4">
                   <p className="break-words text-sm font-medium">{event.title}</p>
                   <p className="break-words text-sm text-muted">
-                    {SOURCE[event.source] ?? event.source} · {event.kind} · <When at={event.occurredAt} now={now} empty="Unknown time" />
+                    {SOURCE[event.source] ?? event.source} · {event.kind} ·{" "}
+                    <When at={event.occurredAt} now={now} empty="Unknown time" />
                   </p>
                   {href ? <ExternalLink href={href}>Open event</ExternalLink> : null}
                 </li>
@@ -217,7 +215,7 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
           </ol>
         )}
         {app.events.length === 20 ? <p className="text-sm text-muted">Showing the latest 20 events.</p> : null}
-      </section>
+      </Panel>
 
       {admin ? (
         <AdminPanel

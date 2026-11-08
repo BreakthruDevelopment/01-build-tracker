@@ -229,6 +229,33 @@ To make yourself an admin, sign up first, then (while the app is running):
 SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=your-secure-password pnpm db:seed
 ```
 
+## Design system
+
+Every app shares the Breakthru look (guide and concept: `ai-dev-os/design/`). Tokens live in `src/app/globals.css`
+(light and dark; use `bg-surface`, `text-muted`, `border-border`, `bg-accent` and the status tokens, never raw colors).
+Fonts load through `next/font/google` in `src/app/layout.tsx`: Newsreader (`font-display`), Public Sans (`font-sans`),
+IBM Plex Mono (`font-mono`). Set the app's name once in `src/lib/app-config.ts` (`APP_TITLE`, or the `APP_NAME` variable).
+
+| Component | Location | Use |
+| --- | --- | --- |
+| `AppShell` | `src/components/app-shell.tsx` | Header (logo, app name, nav, sign in or user and sign out) and footer; wraps every page in the root layout |
+| `PageIntro` | `src/components/ui/` | Eyebrow, Newsreader headline, one-line description, actions |
+| `StatTile`, `StatGrid` | `src/components/ui/` | A number and a label; tiles stack at 375px |
+| `FilterBar` | `src/components/ui/` | Search, select filters, sort and table/cards toggle as a GET form (state in the URL) |
+| `StatusBadge` | `src/components/ui/` | Live, building, blocked, not started (neutral), healthy, degraded, down |
+| `DataList` | `src/components/ui/` | Table from 640px, cards below |
+| `Panel` | `src/components/ui/` | Titled panel; `collapsible` adds a "Show all" toggle (small client component) |
+| `DemoBadge` | `src/components/ui/` | "Demo data" label for seeded or demo content |
+
+The header links come from `NAV_LINKS` in `src/lib/app-config.ts`: Board (`/`) and admin-only Admin (`/admin`).
+The title defaults to Build Tracker. The board keeps search (`q`), cloud (`cloud`), status (`status`), sort
+(`number`, `recent`, `status`), and view (`table`, `cards`) in the URL. Active apps show service/build information
+and the latest summary; planned apps stay in a collapsed neutral backlog. Screenshots from the local 30-app
+demo seed are in [docs/screenshots](docs/screenshots/README.md).
+
+Shared button and field classes are in `src/components/ui/styles.ts` (44px minimum height). Don't add `loading.tsx` or
+`<Suspense>` above a page that calls `requireRoleOrRedirect()` or `notFound()`.
+
 ## Checks
 
 ```bash
@@ -261,9 +288,9 @@ of admin status changes. It does not create notes.
 The board is at `/`, each app at `/apps/1` through `/apps/30`, with admin controls on each app page and config and sync at `/admin` once you sign in as an admin.
 
 1. **Open the Public Board (`/`):**
-   Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: cards for all 30 apps, status chips (`planned`, `building`, `live`, `shipped`), health indicators, and filter buttons. Show that the view works responsively on mobile (375px) without horizontal scrolling.
+   Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: the total, live, planned and blocked tiles, status tabs, the search, cloud and sort filters with a Table/Cards toggle, the Active apps panel with health, CI and the latest AI summary, and the planned backlog, collapsed by default. Show that the view works responsively on mobile (375px) without horizontal scrolling.
 2. **Inspect an App Detail Page (`/apps/1`):**
-   Click on the **Portfolio Build Tracker** card. View its live health status, recent GitHub events (pushes, pull requests, CI runs), and today's AI-generated morning health note. Note that signed-out visitors see no administrative edit controls.
+   Open the **Portfolio Build Tracker** row (or card in Cards view). View its live health status, recent GitHub events (pushes, pull requests, CI runs), and today's AI-generated morning health note. Note that signed-out visitors see no administrative edit controls.
 3. **Sign In as Admin (`/sign-in`):**
    Sign in with admin credentials. Return to `/apps/1` to reveal the administrator tools: the status transition dropdown, health URL override field, and admin notes thread.
 4. **Demonstrate State Machine Enforcement:**
