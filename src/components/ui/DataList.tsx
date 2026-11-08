@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 export type Column<T> = {
   key: string;
@@ -24,6 +24,7 @@ export function DataList<T>({
   caption,
   view = "table",
   empty = "Nothing here yet.",
+  rowDetail,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -31,6 +32,8 @@ export function DataList<T>({
   caption: string;
   view?: "table" | "cards";
   empty?: ReactNode;
+  /** Optional full-width detail below each row and at the end of each card. */
+  rowDetail?: (row: T) => ReactNode;
 }) {
   if (rows.length === 0) {
     return <div className="rounded-card bg-background px-4 py-6 text-center text-sm text-muted">{empty}</div>;
@@ -56,19 +59,32 @@ export function DataList<T>({
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((row) => (
-                <tr key={rowKey(row)}>
-                  {columns.map((c) =>
-                    c === primary ? (
-                      <th key={c.key} scope="row" className={`px-3 py-3 text-left align-middle font-normal ${c.className ?? ""}`}>
-                        {c.cell(row)}
-                      </th>
-                    ) : (
-                      <td key={c.key} className={`px-3 py-3 align-middle ${c.className ?? ""}`}>
-                        {c.cell(row)}
+                <Fragment key={rowKey(row)}>
+                  <tr>
+                    {columns.map((c) =>
+                      c === primary ? (
+                        <th
+                          key={c.key}
+                          scope="row"
+                          className={`px-3 py-3 text-left align-middle font-normal ${c.className ?? ""}`}
+                        >
+                          {c.cell(row)}
+                        </th>
+                      ) : (
+                        <td key={c.key} className={`px-3 py-3 align-middle ${c.className ?? ""}`}>
+                          {c.cell(row)}
+                        </td>
+                      ),
+                    )}
+                  </tr>
+                  {rowDetail && (
+                    <tr>
+                      <td colSpan={columns.length} className="px-3 pb-4 text-sm">
+                        {rowDetail(row)}
                       </td>
-                    ),
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -96,6 +112,7 @@ export function DataList<T>({
               .map((c) => (
                 <div key={c.key}>{c.cell(row)}</div>
               ))}
+            {rowDetail && <div className="border-t border-border pt-3 text-sm">{rowDetail(row)}</div>}
           </li>
         ))}
       </ul>

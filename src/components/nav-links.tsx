@@ -15,7 +15,7 @@ export function NavLinks({ links }: { links: { href: string; label: string }[] }
             key={l.href}
             href={l.href}
             aria-current={active ? "page" : undefined}
-            className={`inline-flex min-h-11 items-center border-b-2 text-sm font-semibold ${
+            className={`inline-flex min-h-11 min-w-11 items-center justify-center border-b-2 text-sm font-semibold ${
               active ? "border-accent text-accent" : "border-transparent text-foreground hover:text-accent"
             }`}
           >

@@ -247,8 +247,11 @@ IBM Plex Mono (`font-mono`). Set the app's name once in `src/lib/app-config.ts` 
 | `Panel` | `src/components/ui/` | Titled panel; `collapsible` adds a "Show all" toggle (small client component) |
 | `DemoBadge` | `src/components/ui/` | "Demo data" label for seeded or demo content |
 
-The header links come from `NAV_LINKS` in `src/lib/app-config.ts`; each app must edit that list (the template's
-`/dashboard` and `/admin` links break if the app deletes those pages).
+The header links come from `NAV_LINKS` in `src/lib/app-config.ts`: Board (`/`) and admin-only Admin (`/admin`).
+The title defaults to Build Tracker. The board keeps search (`q`), cloud (`cloud`), status (`status`), sort
+(`number`, `recent`, `status`), and view (`table`, `cards`) in the URL. Active apps show service/build information
+and the latest summary; planned apps stay in a collapsed neutral backlog. Screenshots from the local 30-app
+demo seed are in [docs/screenshots](docs/screenshots/README.md).
 
 Shared button and field classes are in `src/components/ui/styles.ts` (44px minimum height). Don't add `loading.tsx` or
 `<Suspense>` above a page that calls `requireRoleOrRedirect()` or `notFound()`.
@@ -287,7 +290,7 @@ The board is at `/`, each app at `/apps/1` through `/apps/30`, with admin contro
 1. **Open the Public Board (`/`):**
    Navigate to `https://app1.breakthruventures.ai`. Point out the portfolio overview: cards for all 30 apps, status chips (`planned`, `building`, `live`, `shipped`), health indicators, and filter buttons. Show that the view works responsively on mobile (375px) without horizontal scrolling.
 2. **Inspect an App Detail Page (`/apps/1`):**
-   Click on the **Portfolio Build Tracker** card. View its live health status, recent GitHub events (pushes, pull requests, CI runs), and today's AI-generated morning health note. Note that signed-out visitors see no administrative edit controls.
+   Open the **Portfolio Build Tracker** row (or card in Cards view). View its live health status, recent GitHub events (pushes, pull requests, CI runs), and today's AI-generated morning health note. Note that signed-out visitors see no administrative edit controls.
 3. **Sign In as Admin (`/sign-in`):**
    Sign in with admin credentials. Return to `/apps/1` to reveal the administrator tools: the status transition dropdown, health URL override field, and admin notes thread.
 4. **Demonstrate State Machine Enforcement:**

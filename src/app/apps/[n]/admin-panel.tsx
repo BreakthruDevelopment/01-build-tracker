@@ -9,6 +9,7 @@ import {
   transitionFormAction,
 } from "@/app/actions/tracker";
 import { emptyFormState } from "@/app/actions/form-state";
+import { Panel } from "@/components/ui";
 import { FormMessages } from "@/components/form-messages";
 import { fieldClass, fieldsetClass, primaryButtonClass, secondaryButtonClass } from "@/components/styles";
 import { statusLabel } from "@/lib/format";
@@ -51,20 +52,17 @@ export function AdminPanel({
 }) {
   return (
     <div className="space-y-4">
-      <section className="min-w-0 space-y-3 rounded-card border border-border bg-surface p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Change status</h2>
+      <Panel title="Change status">
         <p className="text-sm text-muted">From {statusLabel(status)}.</p>
         <TransitionForm key={`${status}:${blockedFrom ?? ""}`} n={n} status={status} blockedFrom={blockedFrom} />
-      </section>
-      <section className="min-w-0 space-y-3 rounded-card border border-border bg-surface p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Health URL</h2>
+      </Panel>
+      <Panel title="Health URL">
         <HealthUrlForm key={healthUrl ?? ""} n={n} healthUrl={healthUrl} />
-      </section>
-      <section className="min-w-0 space-y-3 rounded-card border border-border bg-surface p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Private notes</h2>
+      </Panel>
+      <Panel title="Private notes">
         <p className="text-sm text-muted">Visible only to admins. Only the author can delete a note.</p>
         <Notes n={n} notes={notes} />
-      </section>
+      </Panel>
     </div>
   );
 }
@@ -104,7 +102,14 @@ function TransitionForm({ n, status, blockedFrom }: { n: number; status: Status;
         </label>
         <label className="block space-y-1 text-sm" htmlFor={`reason-${n}`}>
           <span className="font-medium">{needsReason ? "Reason" : "Reason (optional)"}</span>
-          <textarea id={`reason-${n}`} name="reason" required={needsReason} maxLength={500} rows={3} className={fieldClass} />
+          <textarea
+            id={`reason-${n}`}
+            name="reason"
+            required={needsReason}
+            maxLength={500}
+            rows={3}
+            className={fieldClass}
+          />
         </label>
         <p className="text-sm text-muted">
           {needsReason

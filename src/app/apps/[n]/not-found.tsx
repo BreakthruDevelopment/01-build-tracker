@@ -1,13 +1,18 @@
 import Link from "next/link";
+import { PageIntro } from "@/components/ui";
+import { buttonSecondary } from "@/components/ui/styles";
 
 export default function AppNotFound() {
   return (
-    <div className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Unknown app</h1>
-      <p className="text-muted">App numbers on this board run from 1 to 30.</p>
-      <Link href="/" className="text-sm text-accent underline underline-offset-2">
-        Back to the board
-      </Link>
-    </div>
+    <PageIntro
+      section="Portfolio"
+      title="Unknown app"
+      description="App numbers on this board run from 1 to 30."
+      actions={
+        <Link href="/" className={buttonSecondary}>
+          Back to the board
+        </Link>
+      }
+    />
   );
 }

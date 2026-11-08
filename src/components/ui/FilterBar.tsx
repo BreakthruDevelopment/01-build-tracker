@@ -35,6 +35,7 @@ export function FilterBar({
         <label className="min-w-0 flex-1 basis-full space-y-1 text-sm font-medium sm:basis-64">
           <span className="sr-only">Search</span>
           <input
+            key={`${searchName}:${search.value ?? ""}`}
             type="search"
             name={searchName}
             defaultValue={search.value}
@@ -45,7 +46,7 @@ export function FilterBar({
         </label>
       )}
       {[...filters, ...(sort ? [sort] : [])].map((s) => (
-        <label key={s.name} className="min-w-0 flex-1 basis-[calc(50%-0.375rem)] space-y-1 text-sm font-medium sm:basis-44 sm:flex-none">
+        <label key={`${s.name}:${s.value ?? ""}`} className="min-w-0 flex-1 basis-[calc(50%-0.375rem)] space-y-1 text-sm font-medium sm:basis-44 sm:flex-none">
           <span className="sr-only">{s.label}</span>
           <select name={s.name} defaultValue={s.value} aria-label={s.label} className={inputClass}>
             {s.options.map((o) => (
@@ -57,7 +58,7 @@ export function FilterBar({
         </label>
       ))}
       {view && (
-        <fieldset className="flex rounded-card border border-border bg-surface p-0.5">
+        <fieldset key={view.value} className="flex rounded-card border border-border bg-surface p-0.5">
           <legend className="sr-only">View</legend>
           {(["table", "cards"] as const).map((v) => {
             // Below 640px the list is always cards, so the toggle shows Cards as active there.

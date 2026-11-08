@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PageIntro, Panel, StatusBadge } from "@/components/ui";
+import { buttonSecondary } from "@/components/ui/styles";
 import { SyncForm } from "./sync-form";
 import { requireRoleOrRedirect } from "@/lib/auth/session";
 import { env } from "@/lib/env";
@@ -26,7 +28,10 @@ export default async function AdminPage() {
   const config = env();
   // Booleans only. Secret values are never rendered or passed to the client form.
   const secrets = [
-    { name: "GITHUB_WEBHOOK_SECRET", set: Boolean(config.GITHUB_WEBHOOK_SECRET) },
+    {
+      name: "GITHUB_WEBHOOK_SECRET",
+      set: Boolean(config.GITHUB_WEBHOOK_SECRET),
+    },
     { name: "INGEST_TOKEN", set: Boolean(config.INGEST_TOKEN) },
     { name: "SYNC_TOKEN", set: Boolean(config.SYNC_TOKEN) },
     { name: "GEMINI_API_KEY", set: Boolean(config.GEMINI_API_KEY) },
@@ -38,37 +43,32 @@ export default async function AdminPage() {
 
   return (
     <div className="min-w-0 space-y-6">
-      <div className="space-y-2">
-        <p>
-          <Link href="/" className="text-sm text-accent underline underline-offset-2">
-            All apps
+      <PageIntro
+        section="Admin"
+        title="Portfolio controls"
+        description="Check configuration and the latest sync activity."
+        actions={
+          <Link href="/" className={buttonSecondary}>
+            Back to board
           </Link>
-        </p>
-        <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
-        <p className="text-sm text-muted">Secrets are shown as set or not set. Values stay in the environment.</p>
-      </div>
+        }
+      />
 
-      <section className="min-w-0 space-y-3" aria-labelledby="secrets-heading">
-        <h2 id="secrets-heading" className="text-lg font-semibold tracking-tight">
-          Configuration
-        </h2>
+      <Panel id="secrets-heading" title="Configuration">
         <p className="text-sm text-muted">AI provider: {config.AI_PROVIDER}</p>
         <dl className="divide-y divide-border rounded-card border border-border bg-surface">
           {secrets.map((secret) => (
             <div key={secret.name} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-4 py-3">
               <dt className="min-w-0 break-all font-mono text-sm">{secret.name}</dt>
-              <dd className={secret.set ? "text-sm font-medium text-success" : "text-sm text-muted"}>
-                {secret.set ? "Set" : "Not set"}
+              <dd>
+                <StatusBadge status={secret.set ? "healthy" : "unknown"} label={secret.set ? "Set" : "Not set"} />
               </dd>
             </div>
           ))}
         </dl>
-      </section>
+      </Panel>
 
-      <section className="min-w-0 space-y-3 rounded-card border border-border bg-surface p-4" aria-labelledby="sync-heading">
-        <h2 id="sync-heading" className="text-lg font-semibold tracking-tight">
-          Last sync
-        </h2>
+      <Panel id="sync-heading" title="Last sync">
         <Snapshot
           now={now}
           at={syncSnapshot.at}
@@ -77,12 +77,9 @@ export default async function AdminPage() {
           extra={null}
         />
         <SyncForm />
-      </section>
+      </Panel>
 
-      <section className="min-w-0 space-y-3 rounded-card border border-border bg-surface p-4" aria-labelledby="ingest-heading">
-        <h2 id="ingest-heading" className="text-lg font-semibold tracking-tight">
-          Last ingest
-        </h2>
+      <Panel id="ingest-heading" title="Last ingest">
         <Snapshot
           now={now}
           at={ingestSnapshot.at}
@@ -90,12 +87,19 @@ export default async function AdminPage() {
           empty="No ingest has been received yet."
           extra={ingestExtra(ingestSnapshot, now)}
         />
-      </section>
+      </Panel>
     </div>
   );
 }
 
-function ingestExtra(snapshot: IngestSnapshot, now: Date): { summary: string | null; reported: string | null; reportedIso: string | null } {
+function ingestExtra(
+  snapshot: IngestSnapshot,
+  now: Date,
+): {
+  summary: string | null;
+  reported: string | null;
+  reportedIso: string | null;
+} {
   return {
     summary: snapshot.summary,
     reported: snapshot.reportedAt ? formatRelative(snapshot.reportedAt, now) : null,
@@ -114,7 +118,11 @@ function Snapshot({
   at: SyncSnapshot["at"];
   lines: string[];
   empty: string;
-  extra: { summary: string | null; reported: string | null; reportedIso: string | null } | null;
+  extra: {
+    summary: string | null;
+    reported: string | null;
+    reportedIso: string | null;
+  } | null;
 }) {
   if (!at && lines.length === 0 && !extra?.summary) {
     return <EmptyState title={empty} />;
