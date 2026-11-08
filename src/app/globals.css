@@ -15,7 +15,6 @@
   --accent: #005fb1; /* Breakthru blue, sampled from the logo */
   --accent-foreground: #ffffff;
   --accent-soft: #e6f0fa;
-  --logo-chip: #ffffff;
 
   --danger: #b42318;
   --success: #177533;
@@ -69,7 +68,6 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
-  --color-logo-chip: var(--logo-chip);
   --color-danger: var(--danger);
   --color-success: var(--success);
   --color-live: var(--live);

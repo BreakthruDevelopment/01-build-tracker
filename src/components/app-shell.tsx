@@ -41,17 +41,24 @@ export async function AppShell({ children, nav }: { children: ReactNode; nav?: R
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 sm:px-6">
           <Link href="/" className="flex min-h-11 min-w-0 basis-full items-center gap-3 sm:basis-auto" aria-label={`${APP_TITLE} home`}>
-            <span className="shrink-0 rounded-md bg-logo-chip px-1.5 py-1">
-              <Image
-                src="/branding/breakthru-logo.png"
-                alt="Breakthru Ventures"
-                width={115}
-                height={32}
-                unoptimized
-                preload
-                className="h-8 w-auto"
-              />
-            </span>
+            {/* Full-colour logo in light mode; the white-on-transparent mono logo in dark mode. */}
+            <Image
+              src="/branding/breakthru-logo.png"
+              alt="Breakthru Ventures"
+              width={115}
+              height={32}
+              unoptimized
+              preload
+              className="h-8 w-auto shrink-0 dark:hidden"
+            />
+            <Image
+              src="/branding/breakthru-logo-dark.png"
+              alt="Breakthru Ventures"
+              width={115}
+              height={32}
+              unoptimized
+              className="hidden h-8 w-auto shrink-0 dark:block"
+            />
             <span aria-hidden className="h-8 w-px shrink-0 bg-border" />
             <span className="truncate font-sans text-lg font-semibold tracking-tight sm:text-xl">{APP_TITLE}</span>
           </Link>
