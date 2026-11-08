@@ -30,6 +30,8 @@ export class AiError extends Error {
   constructor(
     message: string,
     readonly kind: "quota" | "provider" | "invalid_output" | "input_rejected",
+    /** HTTP status from the provider, or "timeout"; safe to log (never the response body). */
+    readonly status?: number | "timeout",
   ) {
     super(message);
     this.name = "AiError";
