@@ -335,6 +335,10 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       return `domain: breakthruventures.ai\napps:\n${apps}\n`;
     };
     const healthy = (version = "abc1234") => json({ status: "ok", version });
+    // Planned apps are polled too. Point the ones a test doesn't care about at a name with no DNS record, so
+    // they skip. Call after the test has set the statuses and health URLs it needs.
+    const park = () =>
+      sql`update app set health_url = 'https://nodns.breakthruventures.ai/api/health' where status = 'planned' and health_url is null`;
 
     it("401 / 403 / 503 gates", async () => {
       stubFetch(() => healthy());
@@ -368,6 +372,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
     it("upserts the catalog but never changes status, and polls 30 apps well under 20 s", async () => {
       await resetApps();
       await sql`update app set status = 'building' where n between 2 and 30`; // app 1 stays planned
+      await park();
       const [orig] = await sql`select name from app where n = 5`;
       await sql`update app set name = 'Stale name' where n = 5`;
       const fetched = stubFetch(async (u) => {
@@ -381,7 +386,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       expect(elapsed).toBeLessThan(20_000);
       const body = await res.json();
       expect(body.catalog.updated).toBe(1);
-      expect(body.health).toMatchObject({ checked: 29, ok: 29, down: 0, skipped: 0 });
+      expect(body.health).toMatchObject({ checked: 29, ok: 29, down: 0, skipped: 1 });
       expect(fetched.filter((f) => f.endsWith("/api/health"))).toHaveLength(29);
 
       const [five] = await sql`select name, status from app where n = 5`;
@@ -405,6 +410,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       await resetApps();
       await sql`delete from app_event where source = 'health'`;
       await sql`update app set status = 'building' where n = 3`;
+      await park();
       let mode: "ok" | "down" = "ok";
       stubFetch(async (u) => {
         if (u.hostname === "raw.githubusercontent.com") return new Response("apps: []"); // invalid: catalog error, polling continues
@@ -447,13 +453,14 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       await sql`update app set health_url = 'https://mapped.sslip.io/api/health' where n = 10`;
       await sql`update app set health_url = 'http://app11.breakthruventures.ai/api/health' where n = 11`; // http: fails parseHealthUrl at fetch time
       await sql`update app set health_url = 'https://hop.breakthruventures.ai/api/health' where n = 12`; // redirects
+      await park();
       const fetched = stubFetch(async (u) => {
         if (u.hostname === "raw.githubusercontent.com") return new Response("apps: []");
         if (u.hostname === "hop.breakthruventures.ai") return new Response(null, { status: 302, headers: { location: "https://169.254.169.254/" } });
         return healthy();
       });
       const body = await (await post()).json();
-      expect(body.health).toMatchObject({ checked: 0, skipped: 6 });
+      expect(body.health).toMatchObject({ checked: 0, skipped: 30 }); // 6 refused + 24 parked planned apps
       expect(fetched.filter((f) => f.includes("sslip.io") || f.includes("app11"))).toEqual([]);
       expect(fetched.filter((f) => f.includes("hop."))).toHaveLength(1); // requested once, redirect not followed
       expect(fetched.some((f) => f.includes("169.254.169.254/"))).toBe(false);
@@ -465,9 +472,10 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       await resetApps();
       await sql`update app set status = 'building', health_url = 'https://mixed.sslip.io/api/health' where n = 15`;
       await sql`update app set status = 'building', health_url = 'https://nodns.breakthruventures.ai/api/health' where n = 16`;
+      await park();
       const fetched = stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response("apps: []") : healthy()));
       const body = await (await post()).json();
-      expect(body.health).toMatchObject({ checked: 0, skipped: 2 });
+      expect(body.health).toMatchObject({ checked: 0, skipped: 30 }); // 2 refused + 28 parked planned apps
       expect(fetched.some((f) => f.includes("mixed.sslip.io") || f.includes("nodns."))).toBe(false);
       const rows = await sql`select distinct health from app where n in (15, 16)`;
       expect(rows.map((r) => r.health)).toEqual(["unknown"]);
@@ -489,6 +497,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
     it("a public sslip.io name is allowed", async () => {
       await resetApps();
       await sql`update app set status = 'building', health_url = 'https://8-8-8-8.sslip.io/api/health' where n = 13`;
+      await park();
       const fetched = stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response("apps: []") : healthy("v2")));
       const body = await (await post()).json();
       expect(body.health).toMatchObject({ checked: 1, ok: 1 });
@@ -496,9 +505,69 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       expect((await sql`select status from app where n = 13`)[0].status).toBe("live");
     });
 
+    it("moves a planned app with a healthy real version to live in two system transitions", async () => {
+      await resetApps();
+      await sql`delete from status_transition where app_n between 1 and 30`;
+      await sql`delete from app_event where source = 'health'`;
+      await sql`update app set status = 'blocked', blocked_from = 'planned' where n = 21`;
+      await park();
+      await sql`update app set health_url = null where n in (18, 19, 20)`;
+      stubFetch(async (u) => {
+        if (u.hostname === "raw.githubusercontent.com") return new Response("apps: []");
+        if (u.hostname === "app19.breakthruventures.ai") return healthy("dev");
+        if (u.hostname === "app20.breakthruventures.ai") return json({ status: "down" }, 500);
+        return healthy("sha-9f8e7d6");
+      });
+      await post();
+      const [eighteen] = await sql`select status, health from app where n = 18`;
+      expect([eighteen.status, eighteen.health]).toEqual(["live", "ok"]);
+      const moves = await sql`select from_status, to_status, actor_id, reason from status_transition where app_n = 18 order by created_at, to_status`;
+      expect(moves).toHaveLength(2);
+      expect(moves.map((m) => `${m.from_status}>${m.to_status}`).sort()).toEqual(["building>live", "planned>building"]);
+      expect(moves.every((m) => m.actor_id === null)).toBe(true); // system actor
+      expect(moves.every((m) => String(m.reason).startsWith("Deployed: health check ok") || String(m.reason).startsWith("Verified live: health check ok"))).toBe(true);
+      expect(moves.some((m) => String(m.reason).includes("sha-9f8e7d6"))).toBe(true);
+      // version "dev" and a failing endpoint leave a planned app planned.
+      const others = await sql`select n, status from app where n in (19, 20) order by n`;
+      expect(others.map((r) => r.status)).toEqual(["planned", "planned"]);
+    });
+
+    it("keeps planned apps quiet: no-DNS apps are skipped, not down, and a down planned app logs no health event", async () => {
+      await resetApps();
+      await sql`delete from app_event where source = 'health'`;
+      await sql`update app set health_url = 'https://nodns.breakthruventures.ai/api/health' where n = 22`;
+      await sql`update app set health_url = 'https://8-8-8-8.sslip.io/api/health' where n = 23`;
+      await sql`update app set health_url = 'https://nodns.breakthruventures.ai/api/health' where n not in (22, 23)`;
+      stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response("apps: []") : json({ status: "down" }, 500)));
+      const body = await (await post()).json();
+      expect(body.health).toMatchObject({ checked: 1, down: 1, skipped: 29 });
+      const [skipped] = await sql`select status, health from app where n = 22`;
+      expect([skipped.status, skipped.health]).toEqual(["planned", "unknown"]);
+      expect(await sql`select 1 from app_event where source = 'health' and app_n between 1 and 30`).toHaveLength(0);
+    });
+
+    it("a status that changed mid-poll (race) is a conflict and is ignored, not an error", async () => {
+      await resetApps();
+      await sql`delete from status_transition where app_n between 1 and 30`;
+      await park();
+      await sql`update app set health_url = null where n = 24`;
+      // While the health request is in flight, an admin moves the app to building and then it is blocked.
+      stubFetch(async (u) => {
+        if (u.hostname === "raw.githubusercontent.com") return new Response("apps: []");
+        await sql`update app set status = 'blocked', blocked_from = 'planned' where n = 24`;
+        return healthy("sha-aaaaaaa");
+      });
+      const res = await post();
+      expect(res.status).toBe(200);
+      const [row] = await sql`select status from app where n = 24`;
+      expect(row.status).toBe("blocked");
+      expect(await sql`select 1 from status_transition where app_n = 24`).toHaveLength(0);
+    });
+
     it("a hanging health endpoint is retried, then times out as down within the budget", async () => {
       await resetApps();
       await sql`update app set status = 'building' where n = 14`;
+      await park();
       let healthCalls = 0;
       vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
         if (new URL(String(input)).hostname === "raw.githubusercontent.com") return Promise.resolve(new Response("apps: []"));

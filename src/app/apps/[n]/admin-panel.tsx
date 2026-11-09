@@ -13,7 +13,7 @@ import { Panel } from "@/components/ui";
 import { FormMessages } from "@/components/form-messages";
 import { fieldClass, fieldsetClass, primaryButtonClass, secondaryButtonClass } from "@/components/styles";
 import { statusLabel } from "@/lib/format";
-import { canTransition, requiresReason, STATUSES, type Status } from "@/lib/status";
+import { requiresReason, STATUSES, transitionOptions, type Status } from "@/lib/status";
 
 export type NoteView = {
   id: string;
@@ -68,8 +68,9 @@ export function AdminPanel({
 }
 
 function TransitionForm({ n, status, blockedFrom }: { n: number; status: Status; blockedFrom: Status | null }) {
-  const options = STATUSES.filter((to) => canTransition(status, to, "admin", blockedFrom));
-  const [to, setTo] = useState<Status | "">(options[0] ?? "");
+  const { options, defaultTo } = transitionOptions(status, blockedFrom);
+  // The parent keys this form on status, so it remounts on the new status and starts at that status's forward step.
+  const [to, setTo] = useState<Status | "">(defaultTo);
   const [state, action, pending] = useActionState(transitionFormAction, emptyFormState);
   const needsReason = to !== "" && requiresReason(status, to);
 
@@ -87,21 +88,36 @@ function TransitionForm({ n, status, blockedFrom }: { n: number; status: Status;
             id={`to-${n}`}
             name="to"
             value={to}
+            required
             onChange={(event) => {
               const next = event.target.value;
               if ((STATUSES as readonly string[]).includes(next)) setTo(next as Status);
             }}
             className={fieldClass}
           >
+            {defaultTo === "" ? (
+              <option value="" disabled>
+                Choose a status
+              </option>
+            ) : null}
             {options.map((option) => (
               <option key={option} value={option}>
                 {statusLabel(option)}
+                {requiresReason(status, option) ? " (reason required)" : ""}
               </option>
             ))}
           </select>
         </label>
         <label className="block space-y-1 text-sm" htmlFor={`reason-${n}`}>
-          <span className="font-medium">{needsReason ? "Reason" : "Reason (optional)"}</span>
+          <span className="font-medium">
+            {needsReason ? (
+              <>
+                Reason <span className="text-danger">(required)</span>
+              </>
+            ) : (
+              "Reason (optional)"
+            )}
+          </span>
           <textarea
             id={`reason-${n}`}
             name="reason"

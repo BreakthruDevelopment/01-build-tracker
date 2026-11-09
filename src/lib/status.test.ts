@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canTransition, requiresReason, STATUSES, type Status, type StatusActor } from "./status";
+import { canTransition, requiresReason, STATUSES, transitionOptions, type Status, type StatusActor } from "./status";
 
 // The spec table, written out independently of the implementation.
 const ALLOWED: Record<string, StatusActor[]> = {
@@ -53,4 +53,31 @@ describe("requiresReason", () => {
       });
     }
   }
+});
+
+describe("transitionOptions", () => {
+  it("puts the forward step first and defaults to it", () => {
+    expect(transitionOptions("planned")).toEqual({ options: ["building", "blocked"], defaultTo: "building" });
+    expect(transitionOptions("building")).toEqual({ options: ["live", "blocked"], defaultTo: "live" });
+    expect(transitionOptions("live")).toEqual({ options: ["shipped", "building", "blocked"], defaultTo: "shipped" });
+  });
+
+  it("never preselects a backward move", () => {
+    expect(transitionOptions("shipped")).toEqual({ options: ["live"], defaultTo: "" });
+  });
+
+  it("restores a blocked app to its stored state", () => {
+    expect(transitionOptions("blocked", "live")).toEqual({ options: ["live"], defaultTo: "live" });
+    expect(transitionOptions("blocked", null)).toEqual({ options: [], defaultTo: "" });
+  });
+
+  it("only offers moves canTransition allows for admins", () => {
+    for (const from of STATUSES) {
+      for (const blockedFrom of [null, "planned", "building", "live"] as const) {
+        for (const to of transitionOptions(from, blockedFrom).options) {
+          expect(canTransition(from, to, "admin", blockedFrom)).toBe(true);
+        }
+      }
+    }
+  });
 });

@@ -1,6 +1,6 @@
 import "server-only";
 import { lookup } from "node:dns/promises";
-import { eq, ne, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { db, schema } from "@/lib/db";
@@ -246,7 +246,9 @@ async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs:
 }
 
 async function pollApps(deadline: AbortSignal) {
-  const apps = await db().select().from(schema.app).where(ne(schema.app.status, "planned"));
+  // Planned apps are polled too: with no GitHub webhook, a healthy deployment is what moves them forward.
+  // One without a DNS record yet is skipped below (dns_not_found), not counted as down.
+  const apps = await db().select().from(schema.app);
   const summary = { checked: 0, ok: 0, down: 0, skipped: 0 };
   const queue = [...apps];
 
@@ -275,12 +277,14 @@ async function pollApps(deadline: AbortSignal) {
 
 async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult, { kind: "checked" }>) {
   const now = new Date();
+  const deployed = r.health === "ok" && !!r.version && r.version !== "dev";
   await db().transaction(async (tx) => {
     await tx
       .update(schema.app)
       .set({ health: r.health, healthVersion: r.version, healthMs: r.ms, healthAt: now })
       .where(eq(schema.app.n, a.n));
-    if (a.health !== r.health) {
+    // A planned app that isn't deployed yet stays quiet: no health events until it moves.
+    if (a.health !== r.health && (a.status !== "planned" || deployed)) {
       await tx.insert(schema.appEvent).values({
         appN: a.n,
         source: "health",
@@ -290,9 +294,13 @@ async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult
       });
     }
   });
-  if (a.status === "building" && r.health === "ok" && r.version && r.version !== "dev") {
+  if (deployed && (a.status === "planned" || a.status === "building")) {
+    const version = r.version!.slice(0, 40);
     try {
-      await systemTransition(a.n, "live", `Health check ok (version ${r.version.slice(0, 40)})`);
+      if (a.status === "planned") {
+        await systemTransition(a.n, "building", `Deployed: health check ok (version ${version})`);
+      }
+      await systemTransition(a.n, "live", `Verified live: health check ok (version ${version})`);
     } catch (err) {
       if (!(err instanceof ConflictError)) throw err;
     }
