@@ -9,7 +9,9 @@ export type Status =
   | "down"
   | "failed"
   | "passed"
-  | "not-started";
+  | "not-started"
+  | "up"
+  | "parked";
 
 const config: Record<Status, { label: string; className: string; dot: string }> = {
   shipped: {
@@ -58,6 +60,9 @@ const config: Record<Status, { label: string; className: string; dot: string }> 
     className: "bg-blocked-soft text-blocked",
     dot: "bg-blocked",
   },
+  // Up and Down (parked) are running states. Parked is yellow: a cost decision, not an outage.
+  up: { label: "Up", className: "bg-live-soft text-live", dot: "bg-live" },
+  parked: { label: "Down", className: "bg-building-soft text-building", dot: "bg-building" },
   // Not started is neutral on purpose: it is a plan, not a problem.
   "not-started": {
     label: "Not started",
@@ -67,10 +72,11 @@ const config: Record<Status, { label: string; className: string; dot: string }> 
 };
 
 /** Status and health label. Always shows text, so color is never the only signal. */
-export function StatusBadge({ status, label }: { status: Status; label?: string }) {
+export function StatusBadge({ status, label, title }: { status: Status; label?: string; title?: string }) {
   const c = config[status];
   return (
     <span
+      title={title}
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-0.5 text-sm font-medium ${c.className}`}
     >
       <span aria-hidden className={`size-2 rounded-full ${c.dot}`} />

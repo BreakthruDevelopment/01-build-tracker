@@ -5,7 +5,9 @@ import {
   addNoteFormAction,
   deleteNoteFormAction,
   healthUrlFormAction,
+  checkNowFormAction,
   regenerateFormAction,
+  runningFormAction,
   transitionFormAction,
 } from "@/app/actions/tracker";
 import { emptyFormState } from "@/app/actions/form-state";
@@ -13,6 +15,7 @@ import { Panel } from "@/components/ui";
 import { FormMessages } from "@/components/form-messages";
 import { fieldClass, fieldsetClass, primaryButtonClass, secondaryButtonClass } from "@/components/styles";
 import { statusLabel } from "@/lib/format";
+import { defaultRunning, type Cloud, type Running } from "@/lib/running";
 import { requiresReason, STATUSES, transitionOptions, type Status } from "@/lib/status";
 
 export type NoteView = {
@@ -37,24 +40,57 @@ export function RegenerateButton({ n }: { n: number }) {
   );
 }
 
+export function CheckNowButton({ n, parked }: { n: number; parked: boolean }) {
+  const [state, action, pending] = useActionState(checkNowFormAction, emptyFormState);
+  return (
+    <form action={action} className="space-y-2" aria-busy={pending}>
+      <input type="hidden" name="n" value={n} />
+      <FormMessages state={state} />
+      <button type="submit" disabled={pending} className={secondaryButtonClass}>
+        {pending ? "Checking…" : "Check now"}
+      </button>
+      <p className="text-sm text-muted">
+        {parked
+          ? "Runs one health check even though this app is Down, which wakes it. Once every 30 seconds."
+          : "Runs one health check right away. Once every 30 seconds."}
+      </p>
+    </form>
+  );
+}
+
 export function AdminPanel({
   n,
   status,
   blockedFrom,
   healthUrl,
   notes,
+  liveCloud,
+  runningOverride,
+  runningReason,
 }: {
   n: number;
   status: Status;
   blockedFrom: Status | null;
   healthUrl: string | null;
   notes: NoteView[];
+  liveCloud: Cloud;
+  runningOverride: Running | null;
+  runningReason: string | null;
 }) {
   return (
     <div className="space-y-4">
       <Panel title="Change status">
         <p className="text-sm text-muted">From {statusLabel(status)}.</p>
         <TransitionForm key={`${status}:${blockedFrom ?? ""}`} n={n} status={status} blockedFrom={blockedFrom} />
+      </Panel>
+      <Panel title="Up / Down">
+        <RunningForm
+          key={`${runningOverride ?? ""}:${runningReason ?? ""}`}
+          n={n}
+          liveCloud={liveCloud}
+          runningOverride={runningOverride}
+          runningReason={runningReason}
+        />
       </Panel>
       <Panel title="Health URL">
         <HealthUrlForm key={healthUrl ?? ""} n={n} healthUrl={healthUrl} />
@@ -135,6 +171,58 @@ function TransitionForm({ n, status, blockedFrom }: { n: number; status: Status;
         <FormMessages state={state} />
         <button type="submit" disabled={pending} className={primaryButtonClass}>
           {pending ? "Updating…" : "Update status"}
+        </button>
+      </fieldset>
+    </form>
+  );
+}
+
+function RunningForm({
+  n,
+  liveCloud,
+  runningOverride,
+  runningReason,
+}: {
+  n: number;
+  liveCloud: Cloud;
+  runningOverride: Running | null;
+  runningReason: string | null;
+}) {
+  const [state, action, pending] = useActionState(runningFormAction, emptyFormState);
+  const def = defaultRunning(liveCloud);
+  return (
+    <form action={action} className="min-w-0 space-y-3" aria-busy={pending}>
+      <fieldset className={fieldsetClass}>
+        <input type="hidden" name="n" value={n} />
+        <p className="text-sm text-muted">
+          {runningOverride
+            ? `Set to ${runningOverride === "up" ? "Up" : "Down"} by an admin${runningReason ? `: ${runningReason}` : ""}.`
+            : `Using the default for this cloud: ${def === "up" ? "Up" : "Down"}.`}{" "}
+          Down apps are parked: sync never contacts them, so a scale-to-zero app is not woken (and billed).
+        </p>
+        <label className="block space-y-1 text-sm" htmlFor={`running-${n}`}>
+          <span className="font-medium">Running state</span>
+          <select id={`running-${n}`} name="to" defaultValue={runningOverride ?? "default"} className={fieldClass}>
+            <option value="default">Default ({def === "up" ? "Up" : "Down"})</option>
+            <option value="up">Up</option>
+            <option value="down">Down (parked)</option>
+          </select>
+        </label>
+        <label className="block space-y-1 text-sm" htmlFor={`running-reason-${n}`}>
+          <span className="font-medium">Reason (optional)</span>
+          <input
+            id={`running-reason-${n}`}
+            name="reason"
+            type="text"
+            maxLength={200}
+            autoComplete="off"
+            className={fieldClass}
+          />
+        </label>
+        <p className="text-sm text-muted">The change and reason are added to the public event history.</p>
+        <FormMessages state={state} />
+        <button type="submit" disabled={pending} className={primaryButtonClass}>
+          {pending ? "Saving…" : "Save running state"}
         </button>
       </fieldset>
     </form>

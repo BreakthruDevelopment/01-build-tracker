@@ -6,6 +6,7 @@ import { db, schema } from "@/lib/db";
 import { BadRequestError, ConflictError, NotFoundError } from "@/lib/errors";
 import { healthUrlSchema } from "@/lib/health-url";
 import { log } from "@/lib/log";
+import { effectiveRunning, isParked, type Running } from "@/lib/running";
 import { canTransition, requiresReason, STATUSES, type Status } from "@/lib/status";
 
 /**
@@ -48,6 +49,12 @@ export type BoardApp = {
   health: "ok" | "degraded" | "down" | "unknown";
   healthVersion: string | null;
   healthAt: Date | null;
+  /** Effective running state: the admin's override if set, otherwise Down for Azure and Up for the rest. */
+  running: Running;
+  /** True when an admin set it (no actor or reason here: those are admin-only). */
+  runningOverridden: boolean;
+  /** Down and not checked by sync; `health` is then the last stored result, not a current one. */
+  parked: boolean;
   lastPushAt: Date | null;
   ciConclusion: string | null;
   ciWorkflow: string | null;
@@ -90,6 +97,9 @@ export type AppDetail = BoardApp & {
 export type AdminAppView = {
   n: number;
   healthUrl: string | null;
+  runningOverride: Running | null;
+  runningReason: string | null;
+  runningChangedAt: Date | null;
   notes: AdminNote[];
 };
 
@@ -108,6 +118,7 @@ const boardColumns = {
   health: A.health,
   healthVersion: A.healthVersion,
   healthAt: A.healthAt,
+  runningOverride: A.runningOverride,
   lastPushAt: A.lastPushAt,
   ciConclusion: A.ciConclusion,
   ciWorkflow: A.ciWorkflow,
@@ -120,6 +131,17 @@ function today(): string {
 }
 
 type SummaryRow = { appN: number; health: "green" | "amber" | "red"; summary: string; flags: { kind: string; detail: string }[]; demo: boolean };
+
+/** Replace the raw override column with the public projection (effective state, no actor or reason). */
+function withRunning<T extends { runningOverride: Running | null; liveCloud: BoardApp["liveCloud"]; status: Status }>(row: T) {
+  const { runningOverride, ...rest } = row;
+  return {
+    ...rest,
+    running: effectiveRunning(row.liveCloud, runningOverride),
+    runningOverridden: runningOverride !== null,
+    parked: isParked({ status: row.status, liveCloud: row.liveCloud, runningOverride }),
+  };
+}
 
 function withSummary<T extends object>(row: T, s: SummaryRow | undefined) {
   return {
@@ -149,7 +171,7 @@ export async function listBoard(): Promise<BoardApp[]> {
       .where(eq(schema.healthSummary.day, today())),
   ]);
   const byApp = new Map(summaries.map((s) => [s.appN, s]));
-  return apps.map((a) => withSummary(a, byApp.get(a.n)));
+  return apps.map((a) => withSummary(withRunning(a), byApp.get(a.n)));
 }
 
 export async function getApp(nInput: unknown): Promise<AppDetail> {
@@ -201,7 +223,7 @@ export async function getApp(nInput: unknown): Promise<AppDetail> {
   ]);
 
   return {
-    ...withSummary(row, summary),
+    ...withSummary(withRunning(row), summary),
     summaryFlags: summary?.flags ?? [],
     history: history.map(({ actorId, ...h }) => ({ ...h, actor: actorId ? ("admin" as const) : ("system" as const) })),
     events,
@@ -294,13 +316,82 @@ export async function setHealthUrl(actor: Actor, nInput: unknown, url: unknown):
 }
 
 // ---------------------------------------------------------------------------
+// Running state (Up / Down)
+// ---------------------------------------------------------------------------
+
+export const runningInput = z.object({
+  /** `default` removes the override, so the cloud's default applies again. */
+  to: z.enum(["up", "down", "default"]),
+  reason: z.string().trim().max(200).optional(),
+});
+
+export type RunningResult = { n: number; running: Running; override: Running | null; changed: boolean };
+
+/**
+ * Admin sets or clears the running-state override. Records an `admin` event (the app's history). Either way the
+ * pending failure stamp is cleared, and the change time resets the "not recorded for 60 minutes" backstop, so
+ * the first check after switching Up is treated like any other first check, not as an app that went silent.
+ */
+export async function setRunning(actor: Actor, nInput: unknown, input: unknown): Promise<RunningResult> {
+  assertCan(actor, "manage");
+  const n = appNumber.parse(nInput);
+  const { to, reason } = runningInput.parse(input);
+  const next: Running | null = to === "default" ? null : to;
+
+  const result = await db().transaction(async (tx) => {
+    const [row] = await tx
+      .select({ liveCloud: A.liveCloud, override: A.runningOverride })
+      .from(A)
+      .where(eq(A.n, n))
+      .for("update");
+    if (!row) throw new NotFoundError("Unknown app");
+    const before = effectiveRunning(row.liveCloud, row.override);
+    const after = effectiveRunning(row.liveCloud, next);
+    if (row.override === next) return { n, running: after, override: next, changed: false };
+
+    const now = new Date();
+    await tx
+      .update(A)
+      .set({
+        runningOverride: next,
+        runningChangedAt: now,
+        runningChangedBy: actor.id,
+        runningReason: reason || null,
+        healthFailingSince: null,
+      })
+      .where(eq(A.n, n));
+    const how = next === null ? "back to default" : "admin override";
+    const title = `Running ${before === "up" ? "Up" : "Down"} → ${after === "up" ? "Up" : "Down"} (${how})${reason ? `: ${reason}` : ""}`;
+    await tx.insert(schema.appEvent).values({
+      appN: n,
+      source: "admin",
+      kind: "running_change",
+      title: title.length > 200 ? `${title.slice(0, 199)}…` : title,
+      occurredAt: now,
+    });
+    return { n, running: after, override: next, changed: true };
+  });
+  log.info("running.set", { n, to, running: result.running, changed: result.changed });
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Admin-only view and notes
 // ---------------------------------------------------------------------------
 
 export async function getAdminView(actor: Actor, nInput: unknown): Promise<AdminAppView> {
   assertCan(actor, "manage");
   const n = appNumber.parse(nInput);
-  const [row] = await db().select({ n: A.n, healthUrl: A.healthUrl }).from(A).where(eq(A.n, n));
+  const [row] = await db()
+    .select({
+      n: A.n,
+      healthUrl: A.healthUrl,
+      runningOverride: A.runningOverride,
+      runningReason: A.runningReason,
+      runningChangedAt: A.runningChangedAt,
+    })
+    .from(A)
+    .where(eq(A.n, n));
   if (!row) throw new NotFoundError("Unknown app");
   const notes = await db()
     .select({

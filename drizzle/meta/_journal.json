@@ -43,6 +43,13 @@
       "when": 1794238657740,
       "tag": "0005_health-confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794261149793,
+      "tag": "0006_running-state",
+      "breakpoints": true
     }
   ]
 }

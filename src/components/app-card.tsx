@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { BoardApp } from "@/lib/tracker";
 import { cloudLabel, httpsUrl } from "@/lib/format";
-import { CiResult, DemoBadge, HealthMark, StatusChip, SummaryMark, When } from "@/components/tracker-ui";
+import { CiResult, DemoBadge, HealthCell, RunningMark, StatusChip, SummaryMark, When } from "@/components/tracker-ui";
 
 export function AppCard({ app, now }: { app: BoardApp; now: Date }) {
   const ciHref = httpsUrl(app.ciUrl);
@@ -25,9 +25,15 @@ export function AppCard({ app, now }: { app: BoardApp; now: Date }) {
       </div>
       <dl className="space-y-1 text-sm">
         <div>
+          <dt className="sr-only">Up / Down</dt>
+          <dd>
+            <RunningMark running={app.running} parked={app.parked} overridden={app.runningOverridden} />
+          </dd>
+        </div>
+        <div>
           <dt className="sr-only">Health</dt>
           <dd>
-            <HealthMark health={app.health} />
+            <HealthCell health={app.health} parked={app.parked} healthAt={app.healthAt} now={now} />
           </dd>
         </div>
         <div>

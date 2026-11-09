@@ -20,7 +20,7 @@ probes, and cloud free-tier usage into one board with an AI-generated daily heal
   today's AI summary line. Public responses never include private notes, user emails, actor ids or health-check URLs; history shows the actor only as `system` or `admin`.
 - **Admin (Michael):**
   Authenticated administrators (`admin` role) have exclusive authorization to perform status transitions, set custom
-  health URL overrides, write private administrative notes, run a catalog/health sync on demand, and
+  health URL overrides, set an app Up or Down (parked), check one app now, write private administrative notes, run a catalog/health sync on demand, and
   regenerate an app's AI summary (once per app per hour).
 - **Machines:**
   - **GitHub:** Delivers `push`, `pull_request`, and `workflow_run` webhooks signed via HMAC-SHA256.
@@ -68,16 +68,26 @@ Data is ingested through three external machine endpoints. Because the service d
 3. **Scheduled Sync (`POST /api/sync`):**
    Triggered every 30 minutes by a GitHub Actions workflow using `SYNC_TOKEN`, or by a signed-in admin (same-origin requests only). Re-reads
    `catalog.yaml` to sync names and cloud metadata, and polls every app's `/api/health` (all concurrently; 6s first attempt, one retry of up to 13s for scale-to-zero cold starts,
-   16 KB body limit). Auto-transitions verified apps from `building` to `live`, and from `planned` through `building` to `live` (planned apps need no webhook; one with no DNS record yet is skipped).
+   16 KB body limit). Auto-transitions verified apps from `building` to `live`, and from `planned` through `building` to `live` (planned apps need no webhook; one with no DNS record yet is skipped). Apps that are Down (parked, see [Up / Down](#up--down)) get no request at all.
 
 A machine endpoint whose secret is unset answers 503, so nothing is open by default. (One deliberate exception: a signed-in admin can run sync and summaries from the app itself before `SYNC_TOKEN` exists.)
+
+## Up / Down
+
+Every app has a running state, shown as its own column next to Health on the board (table and cards) and on the app page: **Up** (green) or **Down** (yellow). Down means *parked to save cost*, not an outage: it reads "Parked: not checked, wakes on first visit" and the Health column then shows "Not checked (parked)" with the time of the last stored check.
+
+- **Default:** apps whose catalog `live_cloud` is `azure` are Down; every other cloud is Up.
+- **Override:** an admin can set Up, Down, or back to Default from the app's admin panel ("Up / Down"), with an optional reason (200 chars). The override is stored on the app (`running_override` `up | down`, nullable; `running_changed_at`, `running_changed_by`, `running_reason`). The effective state is `override ?? default`. Every change adds an `admin` event (`running_change`) to the app's history, with the reason. The reason and actor are admin-only; the public board and app JSON carry only `running` (effective), `runningOverridden` and `parked`.
+- **Why:** Azure Container Apps scale to zero, and every health ping wakes a replica that Azure bills for about 6 to 7 minutes. At 0.25 vCPU and 0.5 GiB that is about 100 vCPU-seconds and 200 GiB-seconds per wake. Checking twice an hour uses about 144k of the subscription's 180k free vCPU-seconds a month for a single Azure app, so a second Azure app would cost money. Azure apps therefore stay Down until needed; the board says so, and an admin brings one Up for a demo and parks it again afterwards.
+- **Rules:** [Sync](#machine-endpoints-details) never contacts a parked app. The AI summary treats a parked app as parked: it is neither unknown nor down, and gets no health flag.
+- **Code:** the rules are pure functions in `src/lib/running.ts` (`defaultRunning`, `effectiveRunning`, `isParked`, `runningView`, `healthView`), unit tested in `src/lib/running.test.ts`; `setRunning` is in `src/lib/tracker.ts` and `checkNow` in `src/lib/sync.ts`; tests in `test/running.integration.test.ts`.
 
 ## API
 
 | Path | Who | What |
 | --- | --- | --- |
-| `GET /api/board` | public | All 30 apps: status, health, CI, last push, today's summary |
-| `GET /api/apps/:n` | public | One app: status history, last 20 events, today's summary and flags |
+| `GET /api/board` | public | All 30 apps: status, health, running state (`running`, `runningOverridden`, `parked`), CI, last push, today's summary |
+| `GET /api/apps/:n` | public | One app: status history, last 20 events, running state, today's summary and flags |
 | `POST /api/apps/:n/transition` | admin | `{to, reason?}`; enforces the state machine (409 illegal, 400 missing reason) |
 | `PATCH /api/apps/:n` | admin | `{health_url}` (https, allow-listed host) or `null` to clear |
 | `POST /api/apps/:n/notes`, `DELETE /api/apps/:n/notes/:id` | admin; delete by author only | Private notes |
@@ -98,7 +108,7 @@ credential. Secrets are never logged.
 | --- | --- | --- |
 | `POST /api/webhooks/github` | GitHub (events `push`, `pull_request`, `workflow_run`; `ping` answers 200, others 202) | `X-Hub-Signature-256` HMAC with `GITHUB_WEBHOOK_SECRET`; body up to 1 MB; deduped on `X-GitHub-Delivery`; repos outside `BreakthruDevelopment/<catalog repo>` answer 202 |
 | `POST /api/ingest` | ops monitor, nightly | `Authorization: Bearer $INGEST_TOKEN`; body up to 64 KB |
-| `POST /api/sync` | scheduled workflow, or a signed-in admin | `Authorization: Bearer $SYNC_TOKEN`, or an admin session; returns `{"catalog":{"updated":N},"health":{"checked":N,"ok":N,"down":N,"unconfirmed":N,"skipped":N}}` |
+| `POST /api/sync` | scheduled workflow, or a signed-in admin | `Authorization: Bearer $SYNC_TOKEN`, or an admin session; returns `{"catalog":{"updated":N},"health":{"checked":N,"ok":N,"down":N,"unconfirmed":N,"skipped":N,"parked":N}}` |
 
 Sync re-reads `catalog.yaml` (names, subdomains, clouds, repos; never status), then polls
 `app.health_url ?? https://<subdomain>/api/health` for every app, `planned` included (a planned app logs no health events until it is deployed). Each URL is re-checked
@@ -106,7 +116,11 @@ against the host allow-list, its DNS answers must all be public addresses (loopb
 CGNAT, ULA and unspecified are refused, IPv4-mapped IPv6 included), redirects are not followed, and a
 check has up to 6 s plus one 13 s retry, and 16 KB. A refused check counts as `skipped`, not `down`.
 
+**Parked apps are never contacted.** An app whose effective running state is Down (see [Up / Down](#up--down)) is dropped before any DNS lookup or request, so a scale-to-zero app is never woken by sync. It is counted under `parked` and nowhere else (not `checked`, `ok`, `down`, `unconfirmed` or `skipped`); its last stored health, version and check time stay as they were and the board shows them as "Not checked (parked)". Two apps are still checked while Down: a `planned` app (a healthy deployment is what promotes it, as in PR #27), and a `building` app that is Down only by default (an Azure app has to be verified live once); after that an Azure app is parked. An admin's explicit Down on a `building` app is honoured. The "no recorded check in 60 minutes" backstop below never applies to a parked app, and counts from the later of the last recorded check and the last Up/Down change, so bringing an app Up does not make its first failed check an immediate Down: switching Up also clears `health_failing_since`, and the next check is treated like any first check.
+
 **Confirm before down.** A scale-to-zero app (Azure Container Apps, Cloud Run) can take longer to answer its first request after idle than a check allows, and the check is what wakes it. So a failed check (timeout, connection error, non-2xx without a `degraded` body) on a non-planned app that isn't already `down` is only *unconfirmed* the first time: the app's `health_failing_since` is stamped, its health, version, latency and events stay as they were, and the sync summary counts it under `unconfirmed`. A later failure records `down` and the `health_change` event as usual only when the stamp is between 60 s and 4 minutes old. Younger than 60 s (an overlapping sync or a double click: the app has had no time to wake) is unconfirmed again without restamping. Older than 4 minutes (Azure Container Apps idles out after 300 s, so the app may be asleep again) restamps and is unconfirmed. Any answer (`ok` or `degraded`) clears the stamp. `degraded` is recorded at once, because an app that answers is awake. An app already `down` records failures at once, and so does an app whose health hasn't been recorded for over 60 minutes, so one that keeps failing on unpaired checks can't stay invisible. Planned apps behave as before. One conditional `UPDATE` decides which failure is the first, and the health write locks the app row so two confirming syncs write one event. The Cloud Scheduler job calls `POST /api/sync` in pairs, at :15 and :17 and at :45 and :47: the first call wakes apps, the second confirms. The admin "Run sync now" message names apps still unconfirmed.
+
+**Check now.** On an app's page an admin can run one health check for that app, even if it is Down (this wakes it; the button says so). It uses the same record/confirm path as sync and reports the outcome: "Up and healthy", "Didn't answer yet — it may be waking; try again in a minute" for an unconfirmed failure (a second click a minute later can confirm it), "Still not answering. Recorded as down.", or why the check was skipped. It does not change the Up/Down setting, so a parked app stays parked. Limited to once per 30 seconds per app (one conditional `UPDATE` of `app.manual_check_at`, so double clicks make one request). Server action: `requireRole("admin")`, zod-validated app number, and Next.js's own Origin check for server actions, like the other admin actions.
 
 The last sync and ingest times are stored in the `tracker_state` table (`last_sync`, `last_ingest`) for `/admin`.
 
@@ -154,7 +168,7 @@ issues. Over 64 KB: `413`.
 - **Budget:** one summary per app per day, stored in `health_summary`; never generated on page view. Apps still `planned` with no events get "Not started." without a model call. At most about 5 model calls a day for all 30 apps.
 - **Guardrails:**
   - **Untrusted text is data.** The system prompt says event titles, commit messages and report text are untrusted data, never instructions. Inputs are capped: 120 chars per event title, 1,000 per app, 6 apps and 7,000 chars per call.
-  - **Rules overrule the model.** Code computes the lowest health allowed: red for CI failing on the default branch, a live or shipped app that's down, or any cloud charge; amber for no push on any branch for 24 h while building, degraded health, or free-tier usage at 50% or more. The stored health is the worse of the model's and the rules', the rules' own flags are always kept, and when the rules raise the color the model's wording is replaced with rule-only text. Health readings older than 6 hours count as unknown.
+  - **Rules overrule the model.** Code computes the lowest health allowed: red for CI failing on the default branch, a live or shipped app that's down, or any cloud charge; amber for no push on any branch for 24 h while building, degraded health, or free-tier usage at 50% or more. The stored health is the worse of the model's and the rules', the rules' own flags are always kept, and when the rules raise the color the model's wording is replaced with rule-only text. Health readings older than 6 hours count as unknown, except for parked apps (Down on purpose; see [Up / Down](#up--down)), which are described as parked and never flagged for health.
   - **No invented text on outages.** If Gemini fails (quota, timeout, error), the app stores a rule-only note marked as a fallback, never the demo fixture, and the next run retries.
   - **No tools.** The model can't change status or call anything.
 - **Timeout:** `AI_TIMEOUT_MS` (default 20 s, max 22 s) keeps each call inside Lambda's 29 s limit.

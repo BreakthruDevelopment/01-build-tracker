@@ -12,7 +12,7 @@ import {
   StatusBadge,
 } from "@/components/ui";
 import { buttonSecondary } from "@/components/ui/styles";
-import { CiResult, ExternalLink, HealthMark, StatusChip, When } from "@/components/tracker-ui";
+import { CiResult, ExternalLink, HealthCell, RunningMark, StatusChip, When } from "@/components/tracker-ui";
 import { activityAt, boardHref, boardOptions, selectBoard, type BoardQuery } from "@/lib/board-view";
 import { cloudLabel, httpsUrl, repoUrl, statusLabel } from "@/lib/format";
 import { STATUSES, type Status } from "@/lib/status";
@@ -61,9 +61,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<Boa
       cell: (app) => <StatusChip status={app.status} />,
     },
     {
+      key: "running",
+      header: "Up / Down",
+      cell: (app) => <RunningMark running={app.running} parked={app.parked} overridden={app.runningOverridden} />,
+    },
+    {
       key: "health",
       header: "Health",
-      cell: (app) => <HealthMark health={app.health} />,
+      cell: (app) => <HealthCell health={app.health} parked={app.parked} healthAt={app.healthAt} now={now} />,
     },
     {
       key: "ci",

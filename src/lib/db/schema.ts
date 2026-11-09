@@ -95,6 +95,7 @@ export const appStatus = pgEnum("app_status", [
 export const cloudName = pgEnum("cloud_name", ["aws", "azure", "gcp", "oci"]);
 export const healthState = pgEnum("health_state", ["ok", "degraded", "down", "unknown"]);
 export const eventSource = pgEnum("event_source", ["github", "health", "ops_monitor", "admin"]);
+export const runningState = pgEnum("running_state", ["up", "down"]);
 export const summaryHealth = pgEnum("summary_health", ["green", "amber", "red"]);
 
 /** One row per portfolio app (n = 1..30). Admin-written portfolio data, public to read. */
@@ -118,6 +119,17 @@ export const app = pgTable(
     healthAt: timestamp("health_at", { withTimezone: true }),
     /** When sync first saw the current run of failed checks; null while the last check passed. See sync.ts. */
     healthFailingSince: timestamp("health_failing_since", { withTimezone: true }),
+    /**
+     * Admin override of the running state (Up or Down). Null means "use the default for the app's cloud":
+     * Azure apps are Down (parked to save cost), the rest are Up. See src/lib/running.ts.
+     */
+    runningOverride: runningState("running_override"),
+    /** When the override was last set or cleared. Also resets the "not recorded for 60 min" backstop. */
+    runningChangedAt: timestamp("running_changed_at", { withTimezone: true }),
+    runningChangedBy: text("running_changed_by").references(() => user.id, { onDelete: "set null" }),
+    runningReason: text("running_reason"),
+    /** Last admin "Check now"; the once-per-30-seconds limit is enforced against it. */
+    manualCheckAt: timestamp("manual_check_at", { withTimezone: true }),
     lastPushAt: timestamp("last_push_at", { withTimezone: true }),
     ciConclusion: text("ci_conclusion"),
     ciWorkflow: text("ci_workflow"),

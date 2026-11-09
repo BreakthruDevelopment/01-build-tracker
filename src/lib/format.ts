@@ -147,6 +147,7 @@ export type SyncSnapshot = {
   down: number | null;
   unconfirmed: number | null;
   skipped: number | null;
+  parked: number | null;
   ms: number | null;
 };
 
@@ -163,6 +164,7 @@ export function readSyncState(value: Record<string, unknown> | null): SyncSnapsh
     down: asNumber(health?.down),
     unconfirmed: asNumber(health?.unconfirmed),
     skipped: asNumber(health?.skipped),
+    parked: asNumber(health?.parked),
     ms: asNumber(value?.ms),
   };
 }
@@ -179,6 +181,7 @@ export function syncLines(snapshot: SyncSnapshot): string[] {
     snapshot.down !== null ? `${snapshot.down} down` : null,
     snapshot.unconfirmed ? `${snapshot.unconfirmed} unconfirmed` : null,
     snapshot.skipped !== null ? `${snapshot.skipped} skipped` : null,
+    snapshot.parked ? `${snapshot.parked} parked` : null,
   ].filter((part) => part !== null);
   if (health.length > 0) lines.push(`Health: ${health.join(", ")}.`);
   if (snapshot.ms !== null && snapshot.ms >= 0) {

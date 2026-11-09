@@ -4,12 +4,14 @@ import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { db, schema } from "@/lib/db";
-import { ConflictError } from "@/lib/errors";
+import { type Actor, assertCan } from "@/lib/auth/rbac";
+import { ConflictError, NotFoundError, TooManyRequestsError } from "@/lib/errors";
 import { parseHealthUrl } from "@/lib/health-url";
 import { isPublicIp } from "@/lib/ip-guard";
 import { log } from "@/lib/log";
+import { isParked } from "@/lib/running";
 import { setTrackerState } from "@/lib/tracker-state";
-import { systemTransition } from "@/lib/tracker";
+import { appNumber, systemTransition } from "@/lib/tracker";
 
 export const CATALOG_URL = "https://raw.githubusercontent.com/BreakthruDevelopment/ai-dev-os/main/catalog.yaml";
 const CATALOG_MAX_BYTES = 512 * 1024;
@@ -260,50 +262,78 @@ async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs:
   }
 }
 
+type CheckOutcome =
+  | { kind: "skipped"; reason: string }
+  | { kind: "unconfirmed" }
+  | { kind: "recorded"; health: "ok" | "degraded" | "down" };
+
+type AppRow = typeof schema.app.$inferSelect;
+
+/**
+ * One app's health check, through the shared record/confirm path: used by the scheduled poll and by the admin
+ * "Check now". `parked` is the app's current Down state. A parked app is never passed to this by the poll; only
+ * Check now does, and then the checks that assume routine polling are off:
+ * - the "not recorded for 60 minutes" backstop (a parked app is not recorded, by design);
+ * - the "already down, record at once" shortcut, so a stored `down` from before parking still needs confirming.
+ * For a running app the backstop counts from the later of its last record and its last Up/Down change.
+ */
+async function checkApp(a: AppRow, deadline: AbortSignal, deps: HealthDeps, parked: boolean): Promise<CheckOutcome> {
+  const target = a.healthUrl ?? `https://${a.subdomain}/api/health`;
+  const result = await checkHealth(target, deadline, deps, a.n);
+  if (result.kind === "skipped") {
+    // No DNS record yet is expected for apps still being set up; everything else is worth a warning.
+    const level = result.reason === "dns_not_found" ? log.info : log.warn;
+    level("sync.health_skipped", { n: a.n, reason: result.reason });
+    return { kind: "skipped", reason: result.reason };
+  }
+  if (a.status === "planned") {
+    // A planned app only counts, and is only recorded, once it reports ok with a real version from the
+    // right app. A parked page, a 404 or a 5xx on its subdomain says nothing about the app.
+    const reason = !isDeployed(result) ? "not_deployed" : !matchesApp(a, result.app) ? "app_mismatch" : null;
+    if (reason) {
+      log.info("sync.health_skipped", { n: a.n, reason, ...(reason === "app_mismatch" ? { reported: result.app } : {}) });
+      return { kind: "skipped", reason };
+    }
+  }
+  // Only "down" is confirmed: ok and degraded mean the app answered, so there is nothing to wait out.
+  // Planned apps never get here with a failure (they are skipped above unless deployed and ok).
+  const lastRecord = Math.max(a.healthAt?.getTime() ?? 0, a.runningChangedAt?.getTime() ?? 0);
+  const stale = !parked && lastRecord > 0 && Date.now() - lastRecord > CONFIRM_BACKSTOP_MS;
+  const alreadyDown = !parked && a.health === "down";
+  if (result.health === "down" && a.status !== "planned" && !alreadyDown && !stale && (await confirmFailure(a.n)) === "unconfirmed") {
+    log.info("sync.health_unconfirmed", { n: a.n });
+    return { kind: "unconfirmed" };
+  }
+  await record(a, result);
+  return { kind: "recorded", health: result.health };
+}
+
 /**
  * `appNs` and `deps` exist for tests: they limit the poll to some apps and stub the network.
+ * Parked apps (Down: see running.ts) get no request at all, so a scale-to-zero app is never woken; they are
+ * counted under `parked` and nowhere else.
  */
 export async function pollApps(deadline: AbortSignal, deps: HealthDeps = {}, appNs?: number[]) {
   // Planned apps are polled too: with no GitHub webhook, a healthy deployment is what moves them forward.
-  // One without a DNS record yet is skipped below (dns_not_found), not counted as down.
-  const apps = appNs ? await db().select().from(schema.app).where(inArray(schema.app.n, appNs)) : await db().select().from(schema.app);
-  const summary = { checked: 0, ok: 0, down: 0, unconfirmed: 0, skipped: 0 };
+  // One without a DNS record yet is skipped (dns_not_found), not counted as down.
+  const all = appNs ? await db().select().from(schema.app).where(inArray(schema.app.n, appNs)) : await db().select().from(schema.app);
+  const summary = { checked: 0, ok: 0, down: 0, unconfirmed: 0, skipped: 0, parked: 0 };
+  const apps = all.filter((a) => !isParked(a));
+  summary.parked = all.length - apps.length;
   const queue = [...apps];
 
   async function worker() {
     for (let a = queue.shift(); a; a = queue.shift()) {
-      const target = a.healthUrl ?? `https://${a.subdomain}/api/health`;
-      const result = await checkHealth(target, deadline, deps, a.n);
-      if (result.kind === "skipped") {
-        summary.skipped++;
-        // No DNS record yet is expected for apps still being set up; everything else is worth a warning.
-        const level = result.reason === "dns_not_found" ? log.info : log.warn;
-        level("sync.health_skipped", { n: a.n, reason: result.reason });
-        continue;
-      }
-      if (a.status === "planned") {
-        // A planned app only counts, and is only recorded, once it reports ok with a real version from the
-        // right app. A parked page, a 404 or a 5xx on its subdomain says nothing about the app.
-        const reason = !isDeployed(result) ? "not_deployed" : !matchesApp(a, result.app) ? "app_mismatch" : null;
-        if (reason) {
-          summary.skipped++;
-          log.info("sync.health_skipped", { n: a.n, reason, ...(reason === "app_mismatch" ? { reported: result.app } : {}) });
-          continue;
-        }
-      }
-      summary.checked++;
       try {
-        // Only "down" is confirmed: ok and degraded mean the app answered, so there is nothing to wait out.
-        // Planned apps never get here with a failure (they are skipped above unless deployed and ok).
-        const stale = a.healthAt !== null && Date.now() - a.healthAt.getTime() > CONFIRM_BACKSTOP_MS;
-        if (result.health === "down" && a.status !== "planned" && a.health !== "down" && !stale && (await confirmFailure(a.n)) === "unconfirmed") {
-          summary.unconfirmed++;
-          log.info("sync.health_unconfirmed", { n: a.n });
+        const outcome = await checkApp(a, deadline, deps, false);
+        if (outcome.kind === "skipped") {
+          summary.skipped++;
           continue;
         }
-        if (result.health === "ok") summary.ok++;
-        if (result.health === "down") summary.down++;
-        await record(a, result);
+        summary.checked++;
+        if (outcome.kind === "unconfirmed") summary.unconfirmed++;
+        else if (outcome.health === "ok") summary.ok++;
+        else if (outcome.health === "down") summary.down++;
       } catch (err) {
         log.error("sync.health_record_failed", { n: a.n, error: err instanceof Error ? err.message : String(err) });
       }
@@ -311,6 +341,68 @@ export async function pollApps(deadline: AbortSignal, deps: HealthDeps = {}, app
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, apps.length) }, worker));
   return summary;
+}
+
+export const CHECK_NOW_INTERVAL_S = 30;
+
+export type CheckNowResult = {
+  outcome: "ok" | "degraded" | "down" | "unconfirmed" | "skipped";
+  message: string;
+  /** The app's running state; Check now does not change it. */
+  parked: boolean;
+};
+
+const SKIP_TEXT: Record<string, string> = {
+  url_not_allowed: "the health URL isn't allowed",
+  redirect_refused: "the health URL redirects",
+  private_address: "the health URL resolves to a private address",
+  dns_not_found: "there is no DNS record yet",
+  sync_deadline: "the check ran out of time",
+  not_deployed: "it answered, but it isn't a deployed build yet",
+  app_mismatch: "it answered as a different app",
+};
+
+/**
+ * Admin "Check now": one health check for one app, even if it is Down (this wakes it). The result goes through
+ * the same record/confirm path as sync. At most once per CHECK_NOW_INTERVAL_S per app, enforced by one
+ * conditional UPDATE so two clicks can't both pass.
+ */
+export async function checkNow(actor: Actor, nInput: unknown, deps: HealthDeps = {}): Promise<CheckNowResult> {
+  assertCan(actor, "manage");
+  const n = appNumber.parse(nInput);
+  const claimed = await db()
+    .update(schema.app)
+    .set({ manualCheckAt: sql`now()` })
+    .where(
+      and(
+        eq(schema.app.n, n),
+        or(isNull(schema.app.manualCheckAt), lt(schema.app.manualCheckAt, sql`now() - ${CHECK_NOW_INTERVAL_S} * interval '1 second'`)),
+      ),
+    )
+    .returning();
+  const [a] = claimed;
+  if (!a) {
+    const [row] = await db()
+      .select({ wait: sql<number>`ceil(extract(epoch from (${schema.app.manualCheckAt} + ${CHECK_NOW_INTERVAL_S} * interval '1 second' - now())))::int` })
+      .from(schema.app)
+      .where(eq(schema.app.n, n));
+    if (!row) throw new NotFoundError("Unknown app");
+    throw new TooManyRequestsError(`Checked a moment ago. Try again in ${Math.max(1, row.wait)} seconds.`);
+  }
+  const parked = isParked(a);
+  const deadline = AbortSignal.timeout(SYNC_DEADLINE_MS);
+  const o = await checkApp(a, deadline, deps, parked);
+  log.info("sync.check_now", { n, outcome: o.kind === "recorded" ? o.health : o.kind, parked });
+  const stays = parked ? " It stays Down (parked) until you switch it Up." : "";
+  if (o.kind === "unconfirmed") {
+    return { outcome: "unconfirmed", parked, message: "Didn't answer yet \u2014 it may be waking; try again in a minute." };
+  }
+  if (o.kind === "skipped") {
+    return { outcome: "skipped", parked, message: `Not checked: ${SKIP_TEXT[o.reason] ?? o.reason}.` };
+  }
+  if (o.health === "ok") return { outcome: "ok", parked, message: `Up and healthy.${stays}` };
+  if (o.health === "degraded") return { outcome: "degraded", parked, message: `It answered, but reports degraded.${stays}` };
+  return { outcome: "down", parked, message: "Still not answering. Recorded as down." };
 }
 
 /**

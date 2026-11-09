@@ -82,7 +82,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
 
   async function resetApps() {
     await sql`update app set status = 'planned', blocked_from = null, health_url = null, health = 'unknown',
-      health_version = null, health_ms = null, health_at = null, health_failing_since = null, last_push_at = null,
+      health_version = null, health_ms = null, health_at = null, health_failing_since = null, running_override = null, running_changed_at = null, manual_check_at = null, last_push_at = null,
       ci_conclusion = null, ci_workflow = null, ci_url = null, ci_at = null`;
   }
 
