@@ -130,9 +130,13 @@ export async function runSyncFormAction(): Promise<FormState> {
     revalidatePath("/", "layout");
     const catalog = data.catalog.error ? "Catalog sync failed." : `Catalog updated ${data.catalog.updated}.`;
     const health = data.health;
+    const unconfirmed =
+      health.unconfirmed > 0
+        ? ` ${health.unconfirmed} ${health.unconfirmed === 1 ? "app didn't" : "apps didn't"} answer; ${health.unconfirmed === 1 ? "it" : "they"} will be marked down if the next check also fails.`
+        : "";
     return {
       error: null,
-      message: `${catalog} Health: ${health.checked} checked, ${health.ok} ok, ${health.down} down, ${health.skipped} skipped.`,
+      message: `${catalog} Health: ${health.checked} checked, ${health.ok} ok, ${health.down} down, ${health.skipped} skipped.${unconfirmed}`,
     };
   } catch (err) {
     return failed(actionError(err).error);

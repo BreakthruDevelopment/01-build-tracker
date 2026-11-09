@@ -98,14 +98,17 @@ credential. Secrets are never logged.
 | --- | --- | --- |
 | `POST /api/webhooks/github` | GitHub (events `push`, `pull_request`, `workflow_run`; `ping` answers 200, others 202) | `X-Hub-Signature-256` HMAC with `GITHUB_WEBHOOK_SECRET`; body up to 1 MB; deduped on `X-GitHub-Delivery`; repos outside `BreakthruDevelopment/<catalog repo>` answer 202 |
 | `POST /api/ingest` | ops monitor, nightly | `Authorization: Bearer $INGEST_TOKEN`; body up to 64 KB |
-| `POST /api/sync` | scheduled workflow, or a signed-in admin | `Authorization: Bearer $SYNC_TOKEN`, or an admin session; returns `{"catalog":{"updated":N},"health":{"checked":N,"ok":N,"down":N,"skipped":N}}` |
+| `POST /api/sync` | scheduled workflow, or a signed-in admin | `Authorization: Bearer $SYNC_TOKEN`, or an admin session; returns `{"catalog":{"updated":N},"health":{"checked":N,"ok":N,"down":N,"unconfirmed":N,"skipped":N}}` |
 
 Sync re-reads `catalog.yaml` (names, subdomains, clouds, repos; never status), then polls
 `app.health_url ?? https://<subdomain>/api/health` for every app, `planned` included (a planned app logs no health events until it is deployed). Each URL is re-checked
 against the host allow-list, its DNS answers must all be public addresses (loopback, private, link-local,
 CGNAT, ULA and unspecified are refused, IPv4-mapped IPv6 included), redirects are not followed, and a
-check has up to 6 s plus one 13 s retry, and 16 KB. A refused check counts as `skipped`, not `down`. The last sync and ingest times are
-stored in the `tracker_state` table (`last_sync`, `last_ingest`) for `/admin`.
+check has up to 6 s plus one 13 s retry, and 16 KB. A refused check counts as `skipped`, not `down`.
+
+**Confirm before down.** A scale-to-zero app (Azure Container Apps, Cloud Run) can take longer to answer its first request after idle than a check allows, and the check is what wakes it. So a failed check (timeout, connection error, non-2xx without a `degraded` body) on a non-planned app that isn't already `down` is only *unconfirmed* the first time: the app's `health_failing_since` is stamped, its health, version, latency and events stay as they were, and the sync summary counts it under `unconfirmed`. A second failure within 10 minutes (`CONFIRM_WINDOW_MS` in `src/lib/sync.ts`) records `down` and the `health_change` event as usual; a failure after that window is unconfirmed again. Any answer (`ok` or `degraded`) clears the stamp. `degraded` is recorded at once, because an app that answers is awake. An app already `down` records failures at once, and planned apps behave as before. One conditional `UPDATE` decides which failure is the first, so overlapping syncs can't both count as first. The scheduler therefore calls `POST /api/sync` twice a few minutes apart (the first call wakes apps, the second confirms), and the admin "Run sync now" message names apps still unconfirmed.
+
+The last sync and ingest times are stored in the `tracker_state` table (`last_sync`, `last_ingest`) for `/admin`.
 
 ### Ingest API (the ops monitor's nightly report)
 

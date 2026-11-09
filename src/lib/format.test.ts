@@ -68,6 +68,12 @@ describe("httpsUrl and repoUrl", () => {
 });
 
 describe("tracker state readers", () => {
+  it("shows unconfirmed health failures only when there are some", () => {
+    const lines = syncLines(readSyncState({ health: { checked: 5, ok: 4, down: 0, unconfirmed: 1, skipped: 0 } }));
+    expect(lines).toEqual(["Health: 5 checked, 4 ok, 0 down, 1 unconfirmed, 0 skipped."]);
+  });
+
+
   it("reads a partial sync blob and does not keep the catalog error text", () => {
     const snapshot = readSyncState({
       at: "2026-11-06T11:48:00.000Z",

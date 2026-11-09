@@ -82,7 +82,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
 
   async function resetApps() {
     await sql`update app set status = 'planned', blocked_from = null, health_url = null, health = 'unknown',
-      health_version = null, health_ms = null, health_at = null, last_push_at = null,
+      health_version = null, health_ms = null, health_at = null, health_failing_since = null, last_push_at = null,
       ci_conclusion = null, ci_workflow = null, ci_url = null, ci_at = null`;
   }
 
@@ -423,8 +423,12 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       // version "dev" does not promote.
       expect((await sql`select status from app where n = 3`)[0].status).toBe("building");
       mode = "down";
+      // The first failed check is unconfirmed: nothing changes. The second inside the window records down.
       const third = await (await post()).json();
-      expect(third.health.down).toBe(1);
+      expect(third.health).toMatchObject({ down: 0, unconfirmed: 1 });
+      expect(await sql`select 1 from app_event where app_n = 3 and source = 'health'`).toHaveLength(1);
+      const fourth = await (await post()).json();
+      expect(fourth.health).toMatchObject({ down: 1, unconfirmed: 0 });
       const ev = await sql`select title from app_event where app_n = 3 and source = 'health' order by occurred_at`;
       expect(ev).toHaveLength(2);
       expect(ev[1].title).toContain("down");
@@ -604,7 +608,8 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
 
     it("a hanging health endpoint is retried, then times out as down within the budget", async () => {
       await resetApps();
-      await sql`update app set status = 'building' where n = 14`;
+      // A failure was already seen a minute ago, so this one is the confirmation and records down.
+      await sql`update app set status = 'building', health_failing_since = now() - interval '1 minute' where n = 14`;
       await park();
       let healthCalls = 0;
       vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
@@ -617,7 +622,7 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       // 6 s first attempt + 0.5 s backoff + 13 s retry = 19.5 s, under the 21 s sync deadline.
       expect(healthCalls).toBe(2);
       expect(Date.now() - started).toBeLessThan(21_000);
-      expect(body.health).toMatchObject({ checked: 1, down: 1 });
+      expect(body.health).toMatchObject({ checked: 1, down: 1, unconfirmed: 0 });
     }, 25_000);
   });
 });

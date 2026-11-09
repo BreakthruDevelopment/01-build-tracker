@@ -36,6 +36,13 @@
       "when": 1793832935280,
       "tag": "0004_summary-updated-at",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794238657740,
+      "tag": "0005_health-confirm",
+      "breakpoints": true
     }
   ]
 }
