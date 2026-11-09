@@ -116,6 +116,8 @@ export const app = pgTable(
     healthVersion: text("health_version"),
     healthMs: integer("health_ms"),
     healthAt: timestamp("health_at", { withTimezone: true }),
+    /** When sync first saw the current run of failed checks; null while the last check passed. See sync.ts. */
+    healthFailingSince: timestamp("health_failing_since", { withTimezone: true }),
     lastPushAt: timestamp("last_push_at", { withTimezone: true }),
     ciConclusion: text("ci_conclusion"),
     ciWorkflow: text("ci_workflow"),

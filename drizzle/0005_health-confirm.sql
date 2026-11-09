@@ -1,0 +1,1 @@
+ALTER TABLE "app" ADD COLUMN "health_failing_since" timestamp with time zone;

@@ -1,6 +1,6 @@
 import "server-only";
 import { lookup } from "node:dns/promises";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { db, schema } from "@/lib/db";
@@ -29,6 +29,20 @@ const CATALOG_TIMEOUT_MS = 4000;
 const SYNC_DEADLINE_MS = 21000;
 /** The catalog has at most 30 apps; check them all at once so cold apps don't queue behind each other. */
 const CONCURRENCY = 30;
+/**
+ * Confirm before Down. A scale-to-zero app can need longer than the check allows for its first request after
+ * idle, and the check itself wakes it. So the first failed check only stamps `health_failing_since`. The app is
+ * recorded down by a later failure only when the stamp is between CONFIRM_MIN_AGE and CONFIRM_MAX_AGE old:
+ * - younger than the minimum: an overlapping sync or a double click, and the app has had no time to wake, so
+ *   it is unconfirmed and not restamped;
+ * - older than the maximum: the app may have gone back to sleep since (Azure Container Apps idles out after
+ *   300 s), so this failure is a new first failure and restamps.
+ * The scheduler calls sync in pairs a couple of minutes apart (:15/:17, :45/:47), which lands in that range.
+ */
+const CONFIRM_MIN_AGE_S = 60;
+const CONFIRM_MAX_AGE_S = 4 * 60;
+/** Backstop: an app not recorded for this long is confirmed on its next failure, so it can't stay invisible. */
+const CONFIRM_BACKSTOP_MS = 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -246,17 +260,20 @@ async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs:
   }
 }
 
-async function pollApps(deadline: AbortSignal) {
+/**
+ * `appNs` and `deps` exist for tests: they limit the poll to some apps and stub the network.
+ */
+export async function pollApps(deadline: AbortSignal, deps: HealthDeps = {}, appNs?: number[]) {
   // Planned apps are polled too: with no GitHub webhook, a healthy deployment is what moves them forward.
   // One without a DNS record yet is skipped below (dns_not_found), not counted as down.
-  const apps = await db().select().from(schema.app);
-  const summary = { checked: 0, ok: 0, down: 0, skipped: 0 };
+  const apps = appNs ? await db().select().from(schema.app).where(inArray(schema.app.n, appNs)) : await db().select().from(schema.app);
+  const summary = { checked: 0, ok: 0, down: 0, unconfirmed: 0, skipped: 0 };
   const queue = [...apps];
 
   async function worker() {
     for (let a = queue.shift(); a; a = queue.shift()) {
       const target = a.healthUrl ?? `https://${a.subdomain}/api/health`;
-      const result = await checkHealth(target, deadline, {}, a.n);
+      const result = await checkHealth(target, deadline, deps, a.n);
       if (result.kind === "skipped") {
         summary.skipped++;
         // No DNS record yet is expected for apps still being set up; everything else is worth a warning.
@@ -275,9 +292,17 @@ async function pollApps(deadline: AbortSignal) {
         }
       }
       summary.checked++;
-      if (result.health === "ok") summary.ok++;
-      if (result.health === "down") summary.down++;
       try {
+        // Only "down" is confirmed: ok and degraded mean the app answered, so there is nothing to wait out.
+        // Planned apps never get here with a failure (they are skipped above unless deployed and ok).
+        const stale = a.healthAt !== null && Date.now() - a.healthAt.getTime() > CONFIRM_BACKSTOP_MS;
+        if (result.health === "down" && a.status !== "planned" && a.health !== "down" && !stale && (await confirmFailure(a.n)) === "unconfirmed") {
+          summary.unconfirmed++;
+          log.info("sync.health_unconfirmed", { n: a.n });
+          continue;
+        }
+        if (result.health === "ok") summary.ok++;
+        if (result.health === "down") summary.down++;
         await record(a, result);
       } catch (err) {
         log.error("sync.health_record_failed", { n: a.n, error: err instanceof Error ? err.message : String(err) });
@@ -286,6 +311,34 @@ async function pollApps(deadline: AbortSignal) {
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, apps.length) }, worker));
   return summary;
+}
+
+/**
+ * Decide whether a failed check is confirmed. One conditional UPDATE stamps the first failure of a run (nothing
+ * stamped, or the stamp is older than the maximum age), so two overlapping syncs can't both be "first". If no
+ * row matched, the stamp's age decides: too young is unconfirmed (and not restamped), otherwise confirmed.
+ * Uses the database clock.
+ */
+async function confirmFailure(n: number): Promise<"unconfirmed" | "confirmed"> {
+  const rows = await db()
+    .update(schema.app)
+    .set({ healthFailingSince: sql`now()` })
+    .where(
+      and(
+        eq(schema.app.n, n),
+        or(
+          isNull(schema.app.healthFailingSince),
+          lt(schema.app.healthFailingSince, sql`now() - ${CONFIRM_MAX_AGE_S} * interval '1 second'`),
+        ),
+      ),
+    )
+    .returning({ n: schema.app.n });
+  if (rows.length > 0) return "unconfirmed";
+  const [row] = await db()
+    .select({ young: sql<boolean>`${schema.app.healthFailingSince} is null or ${schema.app.healthFailingSince} > now() - ${CONFIRM_MIN_AGE_S} * interval '1 second'` })
+    .from(schema.app)
+    .where(eq(schema.app.n, n));
+  return row?.young === false ? "confirmed" : "unconfirmed";
 }
 
 type Checked = Extract<HealthResult, { kind: "checked" }>;
@@ -305,17 +358,28 @@ async function record(a: typeof schema.app.$inferSelect, r: Checked) {
   const now = new Date();
   const deployed = isDeployed(r);
   await db().transaction(async (tx) => {
+    // Lock the row and compare with its current health, not the copy read when the poll began: two syncs that
+    // both confirm a failure must write one health_change event, not two.
+    const [current] = await tx.select({ health: schema.app.health }).from(schema.app).where(eq(schema.app.n, a.n)).for("update");
+    const prev = current?.health ?? a.health;
     await tx
       .update(schema.app)
-      .set({ health: r.health, healthVersion: r.version, healthMs: r.ms, healthAt: now })
+      .set({
+        health: r.health,
+        healthVersion: r.version,
+        healthMs: r.ms,
+        healthAt: now,
+        // Any answer clears the failure run. A confirmed down keeps its stamp until the app answers again.
+        ...(r.health === "down" ? {} : { healthFailingSince: null }),
+      })
       .where(eq(schema.app.n, a.n));
     // A planned app that isn't deployed yet stays quiet: no health events until it moves.
-    if (a.health !== r.health && (a.status !== "planned" || deployed)) {
+    if (prev !== r.health && (a.status !== "planned" || deployed)) {
       await tx.insert(schema.appEvent).values({
         appN: a.n,
         source: "health",
         kind: "health_change",
-        title: `Health ${a.health} → ${r.health}${r.version ? ` (version ${r.version.slice(0, 40)})` : ""}`,
+        title: `Health ${prev} → ${r.health}${r.version ? ` (version ${r.version.slice(0, 40)})` : ""}`,
         occurredAt: now,
       });
     }
