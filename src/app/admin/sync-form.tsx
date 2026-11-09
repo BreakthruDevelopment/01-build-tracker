@@ -15,7 +15,7 @@ export function SyncForm() {
         {pending ? "Syncing…" : "Run sync now"}
       </button>
       <p className="text-sm text-muted">
-        Refreshes catalog names and polls health for apps that are not planned. This can take up to 20 seconds.
+        Refreshes catalog names and polls health for every app. Planned apps move on only once they report a real version. This can take up to 20 seconds.
       </p>
     </form>
   );

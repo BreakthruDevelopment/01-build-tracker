@@ -71,6 +71,17 @@ describe("transitionOptions", () => {
     expect(transitionOptions("blocked", null)).toEqual({ options: [], defaultTo: "" });
   });
 
+  it("offers every move the ALLOWED table gives the admin actor", () => {
+    for (const from of STATUSES) {
+      if (from === "blocked") continue;
+      const expected = STATUSES.filter((to) => (ALLOWED[`${from}>${to}`] ?? []).includes("admin"));
+      expect([...transitionOptions(from).options].sort()).toEqual([...expected].sort());
+    }
+    for (const blockedFrom of ["planned", "building", "live"] as const) {
+      expect(transitionOptions("blocked", blockedFrom).options).toEqual([blockedFrom]);
+    }
+  });
+
   it("only offers moves canTransition allows for admins", () => {
     for (const from of STATUSES) {
       for (const blockedFrom of [null, "planned", "building", "live"] as const) {

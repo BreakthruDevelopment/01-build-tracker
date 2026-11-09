@@ -114,7 +114,7 @@ export async function syncCatalog(deadline: AbortSignal): Promise<{ updated: num
 
 type HealthResult =
   | { kind: "skipped"; reason: string }
-  | { kind: "checked"; health: "ok" | "degraded" | "down"; version: string | null; ms: number };
+  | { kind: "checked"; health: "ok" | "degraded" | "down"; version: string | null; app: string | null; ms: number };
 
 /** Race a promise against an abort signal (DNS lookups can't be aborted directly). */
 function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -220,7 +220,7 @@ async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs:
     }
     const { text } = await readCapped(res, HEALTH_MAX_BYTES);
     const ms = Date.now() - started;
-    let body: { status?: unknown; version?: unknown } = {};
+    let body: { status?: unknown; version?: unknown; app?: unknown } = {};
     try {
       const parsed: unknown = JSON.parse(text);
       if (parsed && typeof parsed === "object") body = parsed as typeof body;
@@ -228,20 +228,21 @@ async function checkHealthOnce(rawUrl: string, deadline: AbortSignal, timeoutMs:
       // A 200 that isn't JSON is up but not trustworthy: degraded.
     }
     const version = typeof body.version === "string" ? body.version.slice(0, 100) : null;
+    const app = typeof body.app === "string" ? body.app.slice(0, 200) : null;
     if (res.status !== 200) {
       // The template's /api/health answers 503 + status "degraded" when its database is down:
       // the app itself is up, so that's degraded rather than down.
       const health = body.status === "degraded" ? "degraded" : "down";
-      return { kind: "checked", health, version, ms, retryable: health === "down" && res.status >= 500 };
+      return { kind: "checked", health, version, app, ms, retryable: health === "down" && res.status >= 500 };
     }
-    return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, ms, retryable: false };
+    return { kind: "checked", health: body.status === "ok" ? "ok" : "degraded", version, app, ms, retryable: false };
   } catch (err) {
     if (err instanceof BlockedError) return { kind: "skipped", reason: "private_address", retryable: false };
     // No DNS record yet (an app still being set up) says nothing about the app's health.
     const code = (err as { code?: unknown } | null)?.code;
     if (code === "ENOTFOUND" || code === "ENODATA") return { kind: "skipped", reason: "dns_not_found", retryable: false };
     if (deadline.aborted) return { kind: "skipped", reason: "sync_deadline", retryable: false };
-    return { kind: "checked", health: "down", version: null, ms: Date.now() - started, retryable: true };
+    return { kind: "checked", health: "down", version: null, app: null, ms: Date.now() - started, retryable: true };
   }
 }
 
@@ -258,8 +259,20 @@ async function pollApps(deadline: AbortSignal) {
       const result = await checkHealth(target, deadline, {}, a.n);
       if (result.kind === "skipped") {
         summary.skipped++;
-        log.warn("sync.health_skipped", { n: a.n, reason: result.reason });
+        // No DNS record yet is expected for apps still being set up; everything else is worth a warning.
+        const level = result.reason === "dns_not_found" ? log.info : log.warn;
+        level("sync.health_skipped", { n: a.n, reason: result.reason });
         continue;
+      }
+      if (a.status === "planned") {
+        // A planned app only counts, and is only recorded, once it reports ok with a real version from the
+        // right app. A parked page, a 404 or a 5xx on its subdomain says nothing about the app.
+        const reason = !isDeployed(result) ? "not_deployed" : !matchesApp(a, result.app) ? "app_mismatch" : null;
+        if (reason) {
+          summary.skipped++;
+          log.info("sync.health_skipped", { n: a.n, reason, ...(reason === "app_mismatch" ? { reported: result.app } : {}) });
+          continue;
+        }
       }
       summary.checked++;
       if (result.health === "ok") summary.ok++;
@@ -275,9 +288,22 @@ async function pollApps(deadline: AbortSignal) {
   return summary;
 }
 
-async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult, { kind: "checked" }>) {
+type Checked = Extract<HealthResult, { kind: "checked" }>;
+
+function isDeployed(r: Checked): boolean {
+  return r.health === "ok" && !!r.version && r.version !== "dev";
+}
+
+/** The health JSON's `app` must name the catalog app (its title, case-insensitive, or its repo slug). */
+function matchesApp(a: { name: string; repo: string }, reported: string | null): boolean {
+  if (!reported) return false;
+  const got = reported.trim().toLowerCase();
+  return got === a.name.trim().toLowerCase() || got === a.repo.trim().toLowerCase();
+}
+
+async function record(a: typeof schema.app.$inferSelect, r: Checked) {
   const now = new Date();
-  const deployed = r.health === "ok" && !!r.version && r.version !== "dev";
+  const deployed = isDeployed(r);
   await db().transaction(async (tx) => {
     await tx
       .update(schema.app)
@@ -296,14 +322,17 @@ async function record(a: typeof schema.app.$inferSelect, r: Extract<HealthResult
   });
   if (deployed && (a.status === "planned" || a.status === "building")) {
     const version = r.version!.slice(0, 40);
-    try {
-      if (a.status === "planned") {
-        await systemTransition(a.n, "building", `Deployed: health check ok (version ${version})`);
+    // Each step is attempted on its own: a conflict on planned to building (the app moved meanwhile)
+    // must not stop building to live; the state machine rejects it if it no longer applies.
+    const step = async (to: "building" | "live", reason: string) => {
+      try {
+        await systemTransition(a.n, to, reason);
+      } catch (err) {
+        if (!(err instanceof ConflictError)) throw err;
       }
-      await systemTransition(a.n, "live", `Verified live: health check ok (version ${version})`);
-    } catch (err) {
-      if (!(err instanceof ConflictError)) throw err;
-    }
+    };
+    if (a.status === "planned") await step("building", `Deployed: health check ok (version ${version})`);
+    await step("live", `Verified live: health check ok (version ${version})`);
   }
 }
 
