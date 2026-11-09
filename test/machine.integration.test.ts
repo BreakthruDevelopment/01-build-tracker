@@ -423,10 +423,11 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       // version "dev" does not promote.
       expect((await sql`select status from app where n = 3`)[0].status).toBe("building");
       mode = "down";
-      // The first failed check is unconfirmed: nothing changes. The second inside the window records down.
+      // The first failed check is unconfirmed: nothing changes. A second one 1 to 4 minutes later records down.
       const third = await (await post()).json();
       expect(third.health).toMatchObject({ down: 0, unconfirmed: 1 });
       expect(await sql`select 1 from app_event where app_n = 3 and source = 'health'`).toHaveLength(1);
+      await sql`update app set health_failing_since = now() - interval '2 minutes' where n = 3`;
       const fourth = await (await post()).json();
       expect(fourth.health).toMatchObject({ down: 1, unconfirmed: 0 });
       const ev = await sql`select title from app_event where app_n = 3 and source = 'health' order by occurred_at`;

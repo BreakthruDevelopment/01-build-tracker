@@ -1,6 +1,6 @@
 /**
  * Runs against a real Postgres when TEST_DATABASE_URL is set (CI provides one).
- * "Confirm before Down": a first failed check is unconfirmed; only a second one inside the window records down.
+ * "Confirm before Down": a first failed check is unconfirmed; only a later one 1 to 4 minutes after the first records down.
  */
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -32,6 +32,9 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
     const [r] = await sql`select health, health_version, health_ms, health_at, health_failing_since, status from app where n = ${n}`;
     return r;
   }
+  /** Pretend the stamp was made `seconds` ago. */
+  const age = (n: number, seconds: number) =>
+    sql`update app set health_failing_since = now() - ${seconds} * interval '1 second' where n = ${n}`;
   const events = async (n: number) =>
     (await sql`select title from app_event where app_n = ${n} and source = 'health'`).length;
 
@@ -73,9 +76,10 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
     }
   });
 
-  it("a second failure inside the window records down and the event", async () => {
+  it("a second failure between 1 and 4 minutes after the first records down and the event", async () => {
     await reset();
     await poll(failing, [N.live]);
+    await age(N.live, 120);
     const stamp = (await row(N.live)).health_failing_since;
     const s = await poll(failing, [N.live]);
     expect(s).toMatchObject({ checked: 1, down: 1, unconfirmed: 0 });
@@ -86,9 +90,9 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
     expect(await events(N.live)).toBe(1);
   });
 
-  it("a failure after the window is unconfirmed again and restamps", async () => {
+  it("a failure after the maximum age is unconfirmed again and restamps", async () => {
     await reset();
-    await sql`update app set health_failing_since = now() - interval '11 minutes' where n = ${N.live}`;
+    await age(N.live, 5 * 60);
     const s = await poll(failing, [N.live]);
     expect(s).toMatchObject({ down: 0, unconfirmed: 1 });
     const r = await row(N.live);
@@ -133,11 +137,59 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
     expect(await events(N.planned)).toBe(0);
   });
 
-  it("two overlapping syncs: exactly one counts as the first failure, the other as the confirmation", async () => {
+  it("two overlapping syncs are both unconfirmed: the app had no time to wake", async () => {
     await reset();
     const [a, b] = await Promise.all([poll(failing, [N.live]), poll(failing, [N.live])]);
-    expect(a.unconfirmed + b.unconfirmed).toBe(1);
-    expect(a.down + b.down).toBe(1);
+    expect(a.unconfirmed + b.unconfirmed).toBe(2);
+    expect(a.down + b.down).toBe(0);
+    expect(await events(N.live)).toBe(0);
+    expect((await row(N.live)).health).toBe("ok");
+  });
+
+  it("a failure under 60 s after the first is unconfirmed and does not restamp; just over 60 s confirms", async () => {
+    await reset();
+    await age(N.live, 50);
+    const before = (await row(N.live)).health_failing_since;
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 1, down: 0 });
+    expect((await row(N.live)).health_failing_since).toEqual(before);
+    await age(N.live, 70);
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 0, down: 1 });
+  });
+
+  it("just under 4 minutes confirms; just over restamps and is unconfirmed", async () => {
+    await reset();
+    await age(N.live, 4 * 60 - 10);
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 0, down: 1 });
+    await reset();
+    await age(N.live, 4 * 60 + 10);
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 1, down: 0 });
+    expect((await row(N.live)).health).toBe("ok");
+  });
+
+  it("a degraded answer followed by a failure is unconfirmed", async () => {
+    await reset();
+    await poll(degraded, [N.live]);
+    expect((await row(N.live)).health_failing_since).toBeNull();
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 1, down: 0 });
+    expect((await row(N.live)).health).toBe("degraded");
+  });
+
+  it("backstop: an app not recorded for over 60 minutes goes down on its first failure", async () => {
+    await reset();
+    await sql`update app set health_at = now() - interval '61 minutes' where n = ${N.live}`;
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 0, down: 1 });
+    expect((await row(N.live)).health).toBe("down");
+    await reset();
+    await sql`update app set health_at = now() - interval '59 minutes' where n = ${N.live}`;
+    expect(await poll(failing, [N.live])).toMatchObject({ unconfirmed: 1, down: 0 });
+  });
+
+  it("two syncs that both confirm write one health_change event", async () => {
+    await reset();
+    await age(N.live, 120);
+    const [a, b] = await Promise.all([poll(failing, [N.live]), poll(failing, [N.live])]);
+    expect(a.down + b.down).toBe(2);
     expect(await events(N.live)).toBe(1);
+    expect((await row(N.live)).health).toBe("down");
   });
 });

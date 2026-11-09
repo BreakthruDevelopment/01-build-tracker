@@ -132,7 +132,7 @@ export async function runSyncFormAction(): Promise<FormState> {
     const health = data.health;
     const unconfirmed =
       health.unconfirmed > 0
-        ? ` ${health.unconfirmed} ${health.unconfirmed === 1 ? "app didn't" : "apps didn't"} answer; ${health.unconfirmed === 1 ? "it" : "they"} will be marked down if the next check also fails.`
+        ? ` ${health.unconfirmed} ${health.unconfirmed === 1 ? "app didn't" : "apps didn't"} answer; ${health.unconfirmed === 1 ? "it" : "they"} will be marked down if ${health.unconfirmed === 1 ? "it" : "they"} also ${health.unconfirmed === 1 ? "fails" : "fail"} a check in the next few minutes.`
         : "";
     return {
       error: null,

@@ -31,10 +31,18 @@ const SYNC_DEADLINE_MS = 21000;
 const CONCURRENCY = 30;
 /**
  * Confirm before Down. A scale-to-zero app can need longer than the check allows for its first request after
- * idle, and the check itself wakes it. So the first failed check only stamps `health_failing_since`; the app is
- * recorded down when another failure arrives within this window (the scheduler calls sync twice, minutes apart).
+ * idle, and the check itself wakes it. So the first failed check only stamps `health_failing_since`. The app is
+ * recorded down by a later failure only when the stamp is between CONFIRM_MIN_AGE and CONFIRM_MAX_AGE old:
+ * - younger than the minimum: an overlapping sync or a double click, and the app has had no time to wake, so
+ *   it is unconfirmed and not restamped;
+ * - older than the maximum: the app may have gone back to sleep since (Azure Container Apps idles out after
+ *   300 s), so this failure is a new first failure and restamps.
+ * The scheduler calls sync in pairs a couple of minutes apart (:15/:17, :45/:47), which lands in that range.
  */
-export const CONFIRM_WINDOW_MS = 10 * 60 * 1000;
+const CONFIRM_MIN_AGE_S = 60;
+const CONFIRM_MAX_AGE_S = 4 * 60;
+/** Backstop: an app not recorded for this long is confirmed on its next failure, so it can't stay invisible. */
+const CONFIRM_BACKSTOP_MS = 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -287,7 +295,8 @@ export async function pollApps(deadline: AbortSignal, deps: HealthDeps = {}, app
       try {
         // Only "down" is confirmed: ok and degraded mean the app answered, so there is nothing to wait out.
         // Planned apps never get here with a failure (they are skipped above unless deployed and ok).
-        if (result.health === "down" && a.status !== "planned" && a.health !== "down" && (await markFirstFailure(a.n))) {
+        const stale = a.healthAt !== null && Date.now() - a.healthAt.getTime() > CONFIRM_BACKSTOP_MS;
+        if (result.health === "down" && a.status !== "planned" && a.health !== "down" && !stale && (await confirmFailure(a.n)) === "unconfirmed") {
           summary.unconfirmed++;
           log.info("sync.health_unconfirmed", { n: a.n });
           continue;
@@ -305,11 +314,12 @@ export async function pollApps(deadline: AbortSignal, deps: HealthDeps = {}, app
 }
 
 /**
- * True when this check is the first failure of a run (nothing stamped, or the stamp is older than the window),
- * and stamps it. One conditional UPDATE decides, so two overlapping syncs can't both be "first": the loser
- * matches no row and treats its failure as the confirmation. Uses the database clock.
+ * Decide whether a failed check is confirmed. One conditional UPDATE stamps the first failure of a run (nothing
+ * stamped, or the stamp is older than the maximum age), so two overlapping syncs can't both be "first". If no
+ * row matched, the stamp's age decides: too young is unconfirmed (and not restamped), otherwise confirmed.
+ * Uses the database clock.
  */
-async function markFirstFailure(n: number): Promise<boolean> {
+async function confirmFailure(n: number): Promise<"unconfirmed" | "confirmed"> {
   const rows = await db()
     .update(schema.app)
     .set({ healthFailingSince: sql`now()` })
@@ -318,12 +328,17 @@ async function markFirstFailure(n: number): Promise<boolean> {
         eq(schema.app.n, n),
         or(
           isNull(schema.app.healthFailingSince),
-          lt(schema.app.healthFailingSince, sql`now() - ${CONFIRM_WINDOW_MS / 1000} * interval '1 second'`),
+          lt(schema.app.healthFailingSince, sql`now() - ${CONFIRM_MAX_AGE_S} * interval '1 second'`),
         ),
       ),
     )
     .returning({ n: schema.app.n });
-  return rows.length > 0;
+  if (rows.length > 0) return "unconfirmed";
+  const [row] = await db()
+    .select({ young: sql<boolean>`${schema.app.healthFailingSince} is null or ${schema.app.healthFailingSince} > now() - ${CONFIRM_MIN_AGE_S} * interval '1 second'` })
+    .from(schema.app)
+    .where(eq(schema.app.n, n));
+  return row?.young === false ? "confirmed" : "unconfirmed";
 }
 
 type Checked = Extract<HealthResult, { kind: "checked" }>;
@@ -343,6 +358,10 @@ async function record(a: typeof schema.app.$inferSelect, r: Checked) {
   const now = new Date();
   const deployed = isDeployed(r);
   await db().transaction(async (tx) => {
+    // Lock the row and compare with its current health, not the copy read when the poll began: two syncs that
+    // both confirm a failure must write one health_change event, not two.
+    const [current] = await tx.select({ health: schema.app.health }).from(schema.app).where(eq(schema.app.n, a.n)).for("update");
+    const prev = current?.health ?? a.health;
     await tx
       .update(schema.app)
       .set({
@@ -355,12 +374,12 @@ async function record(a: typeof schema.app.$inferSelect, r: Checked) {
       })
       .where(eq(schema.app.n, a.n));
     // A planned app that isn't deployed yet stays quiet: no health events until it moves.
-    if (a.health !== r.health && (a.status !== "planned" || deployed)) {
+    if (prev !== r.health && (a.status !== "planned" || deployed)) {
       await tx.insert(schema.appEvent).values({
         appN: a.n,
         source: "health",
         kind: "health_change",
-        title: `Health ${a.health} → ${r.health}${r.version ? ` (version ${r.version.slice(0, 40)})` : ""}`,
+        title: `Health ${prev} → ${r.health}${r.version ? ` (version ${r.version.slice(0, 40)})` : ""}`,
         occurredAt: now,
       });
     }

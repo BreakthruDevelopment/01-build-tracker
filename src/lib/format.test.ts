@@ -73,7 +73,6 @@ describe("tracker state readers", () => {
     expect(lines).toEqual(["Health: 5 checked, 4 ok, 0 down, 1 unconfirmed, 0 skipped."]);
   });
 
-
   it("reads a partial sync blob and does not keep the catalog error text", () => {
     const snapshot = readSyncState({
       at: "2026-11-06T11:48:00.000Z",
