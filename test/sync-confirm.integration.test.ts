@@ -45,7 +45,8 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
       const status = n === N.planned ? "planned" : n === N.shipped ? "shipped" : "live";
       const health = n === N.down ? "down" : n === N.degraded ? "degraded" : "ok";
       await sql`update app set status = ${status}, blocked_from = null, health = ${health}, health_version = 'v1',
-        health_ms = 50, health_at = null, health_failing_since = null, health_url = ${hostFor(n)} where n = ${n}`;
+        health_ms = 50, health_at = null, health_failing_since = null, health_url = ${hostFor(n)},
+        running_override = 'up', running_changed_at = null where n = ${n}`; // 22 is Azure: keep it checked here
     }
   }
 
@@ -60,7 +61,7 @@ describe.skipIf(!url)("sync confirm before down (Postgres)", () => {
     await sql`delete from app_event where app_n in ${sql(all)}`;
     await sql`delete from status_transition where app_n in ${sql(all)}`;
     await sql`update app set status = 'planned', health = 'unknown', health_version = null, health_ms = null,
-      health_at = null, health_failing_since = null, health_url = null where n in ${sql(all)}`;
+      health_at = null, health_failing_since = null, health_url = null, running_override = null where n in ${sql(all)}`;
     await sql.end();
   });
 

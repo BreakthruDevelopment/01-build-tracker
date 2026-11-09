@@ -43,9 +43,13 @@ export const SYSTEM_PROMPT = `You write a release manager's morning note about s
 For each app in the input, write 1 or 2 factual sentences about its state, then give a health rating and flags.
 
 Input: one JSON object per line, one app per line. Fields: n, name, status, statusHours (hours in that status), health
-(live health check: ok, degraded, down, unknown), version, pushHours (hours since the last push), ci (latest result on the
+(live health check: ok, degraded, down, unknown, or parked), version, pushHours (hours since the last push), ci (latest result on the
 default branch), events (recent event titles), stalled (reports of stalled work), cloud, usage (free-tier use of that cloud)
 and ruleFlags (problems already detected by automatic checks).
+
+"parked" means the app is deliberately switched off to save cost and is not health-checked. That is normal, not a
+problem: never call a parked app down, failing, unknown or unhealthy, never flag it for health, and do not mention
+missing health data. Judge it on its other facts (CI, pushes, usage) only.
 
 Flag these: failing CI; live or shipped apps that are down or degraded; work in progress with no push for 24 hours or
 more; free-tier usage of 50% or more; any charge above zero. Every entry in ruleFlags must appear in your flags, and the
@@ -71,7 +75,8 @@ export type AppFacts = {
   name: string;
   status: Status;
   statusChangedAt: Date;
-  health: "ok" | "degraded" | "down" | "unknown";
+  /** "parked": Down on purpose to save cost (Azure scale-to-zero); not checked, so neither unknown nor an outage. */
+  health: "ok" | "degraded" | "down" | "unknown" | "parked";
   healthVersion: string | null;
   /** Newest push on any branch (work happens on feature branches, not only the default branch). */
   lastPushAt: Date | null;
@@ -236,7 +241,7 @@ export type AppSummary = {
 export function ruleOnlySummary(f: AppFacts, rules: RuleResult): AppSummary {
   if (isNotStarted(f)) return { n: f.n, ...NOT_STARTED, source: "not-started" };
   const status = f.status.charAt(0).toUpperCase() + f.status.slice(1);
-  const lead = `${status}, health ${f.health}.`;
+  const lead = f.health === "parked" ? `${status}, parked to save cost (not health-checked).` : `${status}, health ${f.health}.`;
   const tail = rules.flags.length > 0 ? rules.flags.map((fl) => fl.detail.replace(/\.$/, "") + ".").join(" ") : "No issues found by automatic checks.";
   return { n: f.n, health: rules.floor, summary: clip(`${lead} ${tail}`, 400), flags: rules.flags, source: "rules" };
 }

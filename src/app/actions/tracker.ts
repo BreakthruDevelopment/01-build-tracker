@@ -5,7 +5,7 @@ import type { FormState } from "@/app/actions/form-state";
 import { requireRole } from "@/lib/auth/session";
 import { regenerateSummary } from "@/lib/health-summary";
 import { errorInfo } from "@/lib/http";
-import { runSync } from "@/lib/sync";
+import { checkNow, runSync } from "@/lib/sync";
 import * as tracker from "@/lib/tracker";
 
 /**
@@ -76,6 +76,15 @@ export async function regenerateSummaryAction(n: number) {
   return run(n, async () => regenerateSummary(await requireRole("admin"), n));
 }
 
+export async function setRunningAction(n: number, input: { to: string; reason?: string }) {
+  return run(n, async () => tracker.setRunning(await requireRole("admin"), n, input));
+}
+
+/** Admin "Check now": one health check for this app, even if it is Down (this wakes it). Once per 30 s per app. */
+export async function checkNowAction(n: number) {
+  return run(n, async () => checkNow(await requireRole("admin"), n));
+}
+
 export async function transitionFormAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const n = formNumber(formData);
   if (n === null) return failed("Unknown app.");
@@ -84,6 +93,24 @@ export async function transitionFormAction(_prev: FormState, formData: FormData)
   const result = await transitionAction(n, { to, reason: reason || undefined });
   if (!result.ok) return failed(result.error);
   return { error: null, message: `Moved from ${result.data.from} to ${result.data.to}.` };
+}
+
+export async function runningFormAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const n = formNumber(formData);
+  if (n === null) return failed("Unknown app.");
+  const to = formText(formData, "to");
+  const reason = formText(formData, "reason");
+  const result = await setRunningAction(n, { to, reason: reason || undefined });
+  if (!result.ok) return failed(result.error);
+  if (!result.data.changed) return { error: null, message: "No change: that setting is already in place." };
+  return { error: null, message: `Now ${result.data.running === "up" ? "Up" : "Down"}${result.data.override === null ? " (default)" : ""}.` };
+}
+
+export async function checkNowFormAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const n = formNumber(formData);
+  if (n === null) return failed("Unknown app.");
+  const result = await checkNowAction(n);
+  return result.ok ? { error: null, message: result.data.message } : failed(result.error);
 }
 
 export async function healthUrlFormAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -136,7 +163,7 @@ export async function runSyncFormAction(): Promise<FormState> {
         : "";
     return {
       error: null,
-      message: `${catalog} Health: ${health.checked} checked, ${health.ok} ok, ${health.down} down, ${health.skipped} skipped.${unconfirmed}`,
+      message: `${catalog} Health: ${health.checked} checked, ${health.ok} ok, ${health.down} down, ${health.skipped} skipped, ${health.parked} parked (not checked).${unconfirmed}`,
     };
   } catch (err) {
     return failed(actionError(err).error);

@@ -59,6 +59,11 @@ expect_status GET /api/board 200
 node -e 'try { const { apps } = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!Array.isArray(apps) || apps.length !== 30) process.exit(1); } catch { process.exit(1); }' "$BODY" \
   || fail "GET /api/board must return valid JSON containing exactly 30 apps"
 pass "board lists exactly 30 apps"
+# Up / Down: every app reports its effective running state; Azure apps default to Down (parked), the rest to Up,
+# unless an admin override is in place. No admin-only fields (actor, reason) in the public JSON.
+node -e 'try { const { apps } = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); const body = JSON.stringify(apps); if (!apps.every((a) => (a.running === "up" || a.running === "down") && typeof a.parked === "boolean" && (a.runningOverridden || a.running === (a.liveCloud === "azure" ? "down" : "up")))) process.exit(1); if (/runningChangedBy|runningReason|runningOverride"/.test(body)) process.exit(1); } catch { process.exit(1); }' "$BODY" \
+  || fail "GET /api/board must report running up|down per app, defaulting by cloud, without admin-only fields"
+pass "board reports Up / Down"
 
 for path in / /sign-in; do
   expect_status GET "$path" 200

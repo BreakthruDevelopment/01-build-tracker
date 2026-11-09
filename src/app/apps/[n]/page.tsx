@@ -5,10 +5,10 @@ import { PageIntro, Panel } from "@/components/ui";
 import { buttonSecondary } from "@/components/ui/styles";
 import { notFound } from "next/navigation";
 import { ZodError } from "zod";
-import { AdminPanel, RegenerateButton, type NoteView } from "./admin-panel";
+import { AdminPanel, CheckNowButton, RegenerateButton, type NoteView } from "./admin-panel";
 import { getCurrentUser } from "@/lib/auth/session";
 import { NotFoundError } from "@/lib/errors";
-import { cloudLabel, flagLabel, formatRelative, httpsUrl, repoUrl, statusLabel } from "@/lib/format";
+import { cloudLabel, flagLabel, healthLabel, formatRelative, httpsUrl, repoUrl, statusLabel } from "@/lib/format";
 import { getAdminView, getApp } from "@/lib/tracker";
 import {
   CiResult,
@@ -16,6 +16,7 @@ import {
   EmptyState,
   ExternalLink,
   HealthMark,
+  RunningMark,
   StatusChip,
   SummaryMark,
   When,
@@ -94,16 +95,36 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
       <Panel title="Service overview">
         <dl className="grid grid-cols-1 gap-3 rounded-card border border-border bg-surface p-4 text-sm sm:grid-cols-2">
           <div className="min-w-0">
+            <dt className="text-xs text-muted">Up / Down</dt>
+            <dd className="break-words">
+              <RunningMark running={app.running} parked={app.parked} overridden={app.runningOverridden} showSub={false} />
+              <span className="mt-1 block text-muted">
+                {app.parked
+                  ? "Parked: not checked, wakes on first visit"
+                  : app.running === "down"
+                    ? "Checked until it goes live"
+                    : "Checked by sync"}
+              </span>
+              {app.running === "down" && app.liveCloud === "azure" && !app.runningOverridden ? (
+                <span className="mt-1 block text-muted">Default for Azure apps. Down is a cost choice, not an outage.</span>
+              ) : null}
+            </dd>
+          </div>
+          <div className="min-w-0">
             <dt className="text-xs text-muted">Health</dt>
             <dd className="break-words">
-              <HealthMark health={app.health} />
+              <HealthMark health={app.health} parked={app.parked} />
               {app.healthVersion ? (
                 <span className="mt-1 block break-all text-muted">Version {app.healthVersion}</span>
               ) : null}
-              {app.healthMs !== null ? <span className="mt-1 block text-muted">{app.healthMs} ms</span> : null}
+              {app.healthMs !== null && !app.parked ? <span className="mt-1 block text-muted">{app.healthMs} ms</span> : null}
+              {app.parked && app.health !== "unknown" ? (
+                <span className="mt-1 block text-muted">Last result: {healthLabel(app.health)}</span>
+              ) : null}
               {app.healthAt ? (
                 <span className="mt-1 block text-muted">
-                  Checked <When at={app.healthAt} now={now} empty="not yet" />
+                  {app.parked ? "Last checked " : "Checked "}
+                  <When at={app.healthAt} now={now} empty="not yet" />
                 </span>
               ) : null}
             </dd>
@@ -132,6 +153,7 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
             </dd>
           </div>
         </dl>
+        {admin ? <CheckNowButton n={app.n} parked={app.parked} /> : null}
       </Panel>
 
       <Panel id="summary-heading" title="Today's summary">
@@ -224,6 +246,9 @@ export default async function AppPage({ params }: { params: Promise<{ n: string 
           blockedFrom={app.blockedFrom}
           healthUrl={admin.healthUrl}
           notes={notes}
+          liveCloud={app.liveCloud}
+          runningOverride={admin.runningOverride}
+          runningReason={admin.runningReason}
         />
       ) : null}
     </div>

@@ -5,6 +5,7 @@ import { type Actor, assertCan } from "@/lib/auth/rbac";
 import { db, schema } from "@/lib/db";
 import { NotFoundError, TooManyRequestsError } from "@/lib/errors";
 import { log } from "@/lib/log";
+import { isParked } from "@/lib/running";
 import { appNumber } from "@/lib/tracker";
 
 /**
@@ -97,7 +98,8 @@ async function loadFacts(rows: (typeof A.$inferSelect)[], withEvents: Set<number
         name: r.name,
         status: r.status,
         statusChangedAt: r.statusChangedAt,
-        health: r.healthAt && now.getTime() - r.healthAt.getTime() <= HEALTH_FRESH_MS ? r.health : "unknown",
+        // Parked apps are not checked, so their stored health is old by design: say "parked", never "unknown".
+        health: isParked(r) ? "parked" : r.healthAt && now.getTime() - r.healthAt.getTime() <= HEALTH_FRESH_MS ? r.health : "unknown",
         healthVersion: r.healthVersion,
         lastPushAt,
         ciConclusion: r.ciConclusion,

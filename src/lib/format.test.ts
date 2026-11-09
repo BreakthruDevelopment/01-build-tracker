@@ -73,6 +73,12 @@ describe("tracker state readers", () => {
     expect(lines).toEqual(["Health: 5 checked, 4 ok, 0 down, 1 unconfirmed, 0 skipped."]);
   });
 
+  it("shows the parked count only when there are parked apps", () => {
+    const lines = syncLines(readSyncState({ health: { checked: 20, ok: 20, down: 0, unconfirmed: 0, skipped: 2, parked: 8 } }));
+    expect(lines).toEqual(["Health: 20 checked, 20 ok, 0 down, 2 skipped, 8 parked."]);
+    expect(syncLines(readSyncState({ health: { checked: 1, parked: 0 } }))).toEqual(["Health: 1 checked."]);
+  });
+
   it("reads a partial sync blob and does not keep the catalog error text", () => {
     const snapshot = readSyncState({
       at: "2026-11-06T11:48:00.000Z",

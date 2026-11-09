@@ -74,7 +74,8 @@ describe.skipIf(!url)("daily summaries (Postgres)", () => {
     await sql`delete from app_event`;
     await sql`delete from cloud_usage where metric like 'sm-%'`;
     await sql`update app set status = 'planned', blocked_from = null, health = 'unknown', health_version = null,
-      last_push_at = null, ci_conclusion = null, ci_workflow = null, ci_url = null, ci_at = null`;
+      last_push_at = null, ci_conclusion = null, ci_workflow = null, ci_url = null, ci_at = null,
+      running_override = null, running_changed_at = null`;
   }
   const building = (ns: number[]) =>
     sql`update app set status = 'building', last_push_at = now() - interval '1 hour' where n in ${sql(ns)}`;
@@ -241,7 +242,8 @@ describe.skipIf(!url)("daily summaries (Postgres)", () => {
 
     it("health older than 6 hours (or never checked) counts as unknown for the rules", async () => {
       await sql`update app set status = 'live', health = 'down', health_at = now() - interval '7 hours' where n = 1`;
-      await sql`update app set status = 'live', health = 'down', health_at = now() - interval '1 hour', last_push_at = now() where n = 2`;
+      // App 2 is an Azure app, parked by default, so it is switched Up to be judged on its health.
+      await sql`update app set status = 'live', running_override = 'up', health = 'down', health_at = now() - interval '1 hour', last_push_at = now() where n = 2`;
       await sql`update app set status = 'live', health = 'down', health_at = null, last_push_at = now() where n = 3`;
       await post({ token: SYNC });
       const rows = await sql`select app_n, health from health_summary where app_n in (1, 2, 3) order by app_n`;

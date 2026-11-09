@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { StatusBadge, type Status as BadgeStatus } from "@/components/ui/StatusBadge";
 export { DemoBadge } from "@/components/ui/DemoBadge";
 import type { Status } from "@/lib/status";
+import { healthView, runningView, type Running } from "@/lib/running";
 import { type ServiceHealth, type SummaryTone, formatRelative, formatTimestamp, statusLabel } from "@/lib/format";
 
 const STATUS_BADGE: Record<Status, BadgeStatus> = {
@@ -22,8 +23,45 @@ export function StatusChip({ status }: { status: Status }) {
   return <StatusBadge status={STATUS_BADGE[status]} label={statusLabel(status)} />;
 }
 
-export function HealthMark({ health }: { health: ServiceHealth }) {
+export function HealthMark({ health, parked = false }: { health: ServiceHealth; parked?: boolean }) {
+  const view = healthView(health, parked);
+  if (view.neutral) return <StatusBadge status="unknown" label={view.label} title="Parked apps are not health-checked" />;
   return <StatusBadge status={HEALTH_BADGE[health]} />;
+}
+
+/** Health badge; a parked app shows "Not checked (parked)" with the time of its last stored check. */
+export function HealthCell({ health, parked, healthAt, now }: { health: ServiceHealth; parked: boolean; healthAt: Date | null; now: Date }) {
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <HealthMark health={health} parked={parked} />
+      {parked ? (
+        <span className="text-xs text-muted">
+          Last checked <When at={healthAt} now={now} empty="never" />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Up (green) or Down (yellow: parked to save cost, not an outage). Text label always; subtext when parked. */
+export function RunningMark({
+  running,
+  parked,
+  overridden,
+  showSub = true,
+}: {
+  running: Running;
+  parked: boolean;
+  overridden?: boolean;
+  showSub?: boolean;
+}) {
+  const view = runningView({ running, parked, overridden });
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <StatusBadge status={view.tone === "up" ? "up" : "parked"} label={view.label} title={view.hint} />
+      {showSub && view.sub ? <span className="text-xs text-muted">{view.sub}</span> : null}
+    </span>
+  );
 }
 
 export function SummaryMark({ tone }: { tone: SummaryTone }) {
