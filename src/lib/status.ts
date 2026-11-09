@@ -62,3 +62,27 @@ export function requiresReason(from: Status, to: Status): boolean {
   if (from === "blocked") return false;
   return RULES[from]?.[to]?.reason ?? false;
 }
+
+/** The natural next step for each status; `blocked` restores to its stored state. */
+const FORWARD: Partial<Record<Status, Status>> = { planned: "building", building: "live", live: "shipped" };
+
+/**
+ * Status-form choices for an admin, forward step first, then backward moves, then `blocked`.
+ * `defaultTo` is the forward step only; it is "" when none exists (e.g. shipped), so a backward
+ * move is never preselected.
+ */
+export function transitionOptions(
+  from: Status,
+  blockedFrom?: Status | null,
+): { options: Status[]; defaultTo: Status | "" } {
+  const allowed = STATUSES.filter((to) => canTransition(from, to, "admin", blockedFrom));
+  const forward = from === "blocked" ? (blockedFrom ?? undefined) : FORWARD[from];
+  const first = forward && allowed.includes(forward) ? forward : undefined;
+  const rest = allowed.filter((to) => to !== first);
+  const options = [
+    ...(first ? [first] : []),
+    ...rest.filter((to) => to !== "blocked"),
+    ...rest.filter((to) => to === "blocked"),
+  ];
+  return { options, defaultTo: first ?? "" };
+}

@@ -35,7 +35,7 @@ shipped app experiencing downtime remains `shipped` while alerting on health.
 
 | From → to | Caused by | Conditions / Rules |
 | --- | --- | --- |
-| `planned → building` | GitHub webhook or Admin | Auto-triggered on the first `push` or `pull_request` event for the repository. |
+| `planned → building` | GitHub webhook, Sync endpoint or Admin | Auto-triggered on the first `push` or `pull_request` event for the repository, or by sync when a planned app's health check is `ok` with a real version (then straight on to `live`, as two system transitions). |
 | `building → live` | Sync endpoint or Admin | Auto-triggered when sync verifies `/api/health` returns 200 with `status: "ok"` and `version != "dev"`. |
 | `live → shipped` | Admin only | Final milestone after production DNS is mapped and the app is announced. |
 | `live → building`, `shipped → live` | Admin only | Backward transitions require an explicit explanation reason (rework or rollback). |
@@ -67,8 +67,8 @@ Data is ingested through three external machine endpoints. Because the service d
    cloud resource utilization.
 3. **Scheduled Sync (`POST /api/sync`):**
    Triggered every 30 minutes by a GitHub Actions workflow using `SYNC_TOKEN`, or by a signed-in admin (same-origin requests only). Re-reads
-   `catalog.yaml` to sync names and cloud metadata, and polls active apps' `/api/health` (all concurrently; 6s first attempt, one retry of up to 13s for scale-to-zero cold starts,
-   16 KB body limit). Auto-transitions verified apps from `building` to `live`.
+   `catalog.yaml` to sync names and cloud metadata, and polls every app's `/api/health` (all concurrently; 6s first attempt, one retry of up to 13s for scale-to-zero cold starts,
+   16 KB body limit). Auto-transitions verified apps from `building` to `live`, and from `planned` through `building` to `live` (planned apps need no webhook; one with no DNS record yet is skipped).
 
 A machine endpoint whose secret is unset answers 503, so nothing is open by default. (One deliberate exception: a signed-in admin can run sync and summaries from the app itself before `SYNC_TOKEN` exists.)
 
@@ -101,7 +101,7 @@ credential. Secrets are never logged.
 | `POST /api/sync` | scheduled workflow, or a signed-in admin | `Authorization: Bearer $SYNC_TOKEN`, or an admin session; returns `{"catalog":{"updated":N},"health":{"checked":N,"ok":N,"down":N,"skipped":N}}` |
 
 Sync re-reads `catalog.yaml` (names, subdomains, clouds, repos; never status), then polls
-`app.health_url ?? https://<subdomain>/api/health` for every app that is not `planned`. Each URL is re-checked
+`app.health_url ?? https://<subdomain>/api/health` for every app, `planned` included (a planned app logs no health events until it is deployed). Each URL is re-checked
 against the host allow-list, its DNS answers must all be public addresses (loopback, private, link-local,
 CGNAT, ULA and unspecified are refused, IPv4-mapped IPv6 included), redirects are not followed, and a
 check has up to 6 s plus one 13 s retry, and 16 KB. A refused check counts as `skipped`, not `down`. The last sync and ingest times are
