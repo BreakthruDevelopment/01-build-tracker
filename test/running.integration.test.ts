@@ -98,15 +98,23 @@ describe.skipIf(!url)("running state (Postgres)", () => {
       expect((await t.getApp(AZ)).running).toBe("down");
     });
 
-    it("records each change in the event history, with the reason, and nothing for a no-op", async () => {
+    it("records each change of the effective state in the event history, without the reason", async () => {
       await t.setRunning(admin, AZ, { to: "up", reason: "demo day" });
-      await t.setRunning(admin, AZ, { to: "up", reason: "again" });
+      expect(await t.setRunning(admin, AZ, { to: "up", reason: "again" })).toMatchObject({ changed: false });
       await t.setRunning(admin, AZ, { to: "default" });
       const rows = await events(AZ, "running_change");
-      expect(rows.map((r) => r.title)).toEqual(["Running Down → Up (admin override): demo day", "Running Up → Down (back to default)"]);
+      expect(rows.map((r) => r.title)).toEqual(["Running Down → Up (admin override)", "Running Up → Down (back to default)"]);
       expect(rows.every((r) => r.source === "admin")).toBe(true);
       const detail = await t.getApp(AZ);
       expect(detail.events.some((e) => e.kind === "running_change")).toBe(true);
+    });
+
+    it("an explicit Down on an app that is already Down by default is stored but adds no event", async () => {
+      await t.setRunning(admin, AZ, { to: "down", reason: "keep parked" });
+      expect(await events(AZ, "running_change")).toHaveLength(0);
+      const r = await row(AZ);
+      expect([r.running_override, r.running_reason]).toEqual(["down", "keep parked"]);
+      expect((await t.getApp(AZ)).runningOverridden).toBe(true);
     });
 
     it("keeps the actor, reason and times out of the public board and app JSON", async () => {
@@ -120,6 +128,10 @@ describe.skipIf(!url)("running state (Postgres)", () => {
       }
       expect(json).not.toContain("rn-admin");
       expect(JSON.stringify(await t.getApp(AZ))).not.toContain("rn-admin");
+      // The reason is admin-only: not in the app JSON (events included) nor in the board JSON.
+      expect(JSON.stringify(await t.getApp(AZ))).not.toContain("private-ish reason");
+      expect(json).not.toContain("private-ish reason");
+      expect((await t.getApp(AZ)).events.some((e) => e.kind === "running_change")).toBe(true);
       // Admins can read the reason.
       expect(await t.getAdminView(admin, AZ)).toMatchObject({ runningOverride: "up", runningReason: "private-ish reason" });
       expect((await row(AZ)).running_changed_by).toBe("rn-admin");
@@ -214,6 +226,33 @@ describe.skipIf(!url)("running state (Postgres)", () => {
       expect(r.health).toBe("ok");
       expect(r.health_failing_since).toBeInstanceOf(Date);
       expect(await events(AZ, "health_change")).toHaveLength(0);
+    });
+
+    it("a parked app that was recorded down, switched Up, still gets confirm-before-down on its first failure", async () => {
+      await sql`update app set status = 'live', health = 'down', health_ms = null, health_at = now() - interval '10 minutes' where n = ${AZ}`;
+      await t.setRunning(admin, AZ, { to: "up" });
+      expect(await poll(failing(), [AZ])).toMatchObject({ checked: 1, down: 0, unconfirmed: 1 });
+      expect((await row(AZ)).health_failing_since).toBeInstanceOf(Date);
+      // Once it has been recorded down after the change, further failures record at once as before.
+      await sql`update app set health = 'down', health_at = now(), health_failing_since = null where n = ${AZ}`;
+      expect(await poll(failing(), [AZ])).toMatchObject({ down: 1, unconfirmed: 0 });
+    });
+
+    it("an app that has never been recorded is not stale: its first failure is unconfirmed", async () => {
+      await sql`update app set status = 'live' where n = ${AWS}`; // health unknown, health_at null
+      expect(await poll(failing(), [AWS])).toMatchObject({ down: 0, unconfirmed: 1 });
+    });
+
+    it("an explicit Down parks a planned app too, so it is neither checked nor promoted", async () => {
+      await t.setRunning(admin, AZ_PLANNED, { to: "down" });
+      const f = healthy("14-real-estate");
+      expect(await poll(f, [AZ_PLANNED])).toMatchObject({ checked: 0, parked: 1 });
+      expect(f).not.toHaveBeenCalled();
+      expect((await row(AZ_PLANNED)).status).toBe("planned");
+      // Back to default: the planned Azure app is checked and promoted again.
+      await t.setRunning(admin, AZ_PLANNED, { to: "default" });
+      expect(await poll(f, [AZ_PLANNED])).toMatchObject({ checked: 1, parked: 0 });
+      expect((await row(AZ_PLANNED)).status).toBe("live");
     });
 
     it("an app that was Up all along still hits the backstop after 60 minutes (unchanged behaviour)", async () => {

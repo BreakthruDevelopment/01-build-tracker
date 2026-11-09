@@ -22,15 +22,14 @@ export function effectiveRunning(cloud: Cloud, override: Running | null): Runnin
 }
 
 /**
- * Parked means sync makes no request at all. Planned apps are always checked (a healthy deployment is what
- * promotes them), and so are building apps that are Down only by default (an Azure app must be checked to be
- * verified live; once live it is parked). An admin's explicit Down on a building app is honoured.
+ * Parked means sync makes no request at all. An admin's explicit Down is always honoured, whatever the status.
+ * Down only by default (Azure) does not park a planned app (a healthy deployment is what promotes it) or a
+ * building app (it must be checked to be verified live); once live it is parked.
  */
 export function isParked(app: { status: string; liveCloud: Cloud; runningOverride: Running | null }): boolean {
   if (effectiveRunning(app.liveCloud, app.runningOverride) !== "down") return false;
-  if (app.status === "planned") return false;
-  if (app.status === "building" && app.runningOverride === null) return false;
-  return true;
+  if (app.runningOverride === "down") return true;
+  return app.status !== "planned" && app.status !== "building";
 }
 
 export const PARKED_HINT = "Parked: not checked, wakes on first visit";

@@ -297,9 +297,12 @@ async function checkApp(a: AppRow, deadline: AbortSignal, deps: HealthDeps, park
   }
   // Only "down" is confirmed: ok and degraded mean the app answered, so there is nothing to wait out.
   // Planned apps never get here with a failure (they are skipped above unless deployed and ok).
+  // A never-recorded app is not stale. The backstop counts from the later of the last record and the last Up/Down change.
   const lastRecord = Math.max(a.healthAt?.getTime() ?? 0, a.runningChangedAt?.getTime() ?? 0);
-  const stale = !parked && lastRecord > 0 && Date.now() - lastRecord > CONFIRM_BACKSTOP_MS;
-  const alreadyDown = !parked && a.health === "down";
+  const stale = !parked && a.healthAt !== null && Date.now() - lastRecord > CONFIRM_BACKSTOP_MS;
+  // A stored `down` only counts if it was recorded after the last Up/Down change: a parked app brought back Up
+  // still gets confirm-before-down on its first (cold-start) failure.
+  const alreadyDown = !parked && a.health === "down" && (!a.runningChangedAt || (a.healthAt !== null && a.healthAt > a.runningChangedAt));
   if (result.health === "down" && a.status !== "planned" && !alreadyDown && !stale && (await confirmFailure(a.n)) === "unconfirmed") {
     log.info("sync.health_unconfirmed", { n: a.n });
     return { kind: "unconfirmed" };

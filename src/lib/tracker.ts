@@ -328,7 +328,7 @@ export const runningInput = z.object({
 export type RunningResult = { n: number; running: Running; override: Running | null; changed: boolean };
 
 /**
- * Admin sets or clears the running-state override. Records an `admin` event (the app's history). Either way the
+ * Admin sets or clears the running-state override. Records a public `admin` event (the app's history) when the effective state changes; the reason is admin-only. Either way the
  * pending failure stamp is cleared, and the change time resets the "not recorded for 60 minutes" backstop, so
  * the first check after switching Up is treated like any other first check, not as an app that went silent.
  */
@@ -360,15 +360,18 @@ export async function setRunning(actor: Actor, nInput: unknown, input: unknown):
         healthFailingSince: null,
       })
       .where(eq(A.n, n));
-    const how = next === null ? "back to default" : "admin override";
-    const title = `Running ${before === "up" ? "Up" : "Down"} → ${after === "up" ? "Up" : "Down"} (${how})${reason ? `: ${reason}` : ""}`;
-    await tx.insert(schema.appEvent).values({
-      appN: n,
-      source: "admin",
-      kind: "running_change",
-      title: title.length > 200 ? `${title.slice(0, 199)}…` : title,
-      occurredAt: now,
-    });
+    // The event history is public, so it records the change only; the reason stays in running_reason (admin-only).
+    // No event when the effective state is the same (for example an explicit Down on an app that is Down by default).
+    if (before !== after) {
+      const how = next === null ? "back to default" : "admin override";
+      await tx.insert(schema.appEvent).values({
+        appN: n,
+        source: "admin",
+        kind: "running_change",
+        title: `Running ${before === "up" ? "Up" : "Down"} → ${after === "up" ? "Up" : "Down"} (${how})`,
+        occurredAt: now,
+      });
+    }
     return { n, running: after, override: next, changed: true };
   });
   log.info("running.set", { n, to, running: result.running, changed: result.changed });

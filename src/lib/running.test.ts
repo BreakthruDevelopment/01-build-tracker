@@ -34,14 +34,17 @@ describe("isParked", () => {
     }
   });
 
-  it("keeps checking planned apps, whatever their state", () => {
+  it("keeps checking planned and building apps that are Down only by default", () => {
     expect(isParked(app("planned", "azure", null))).toBe(false);
-    expect(isParked(app("planned", "aws", "down"))).toBe(false);
+    expect(isParked(app("building", "azure", null))).toBe(false);
   });
 
-  it("checks a building app that is Down only by default, but honours an explicit Down", () => {
-    expect(isParked(app("building", "azure", null))).toBe(false);
-    expect(isParked(app("building", "aws", "down"))).toBe(true);
+  it("honours an explicit admin Down at every status, planned and building included", () => {
+    for (const status of ["planned", "building", "live"]) {
+      expect(isParked(app(status, "aws", "down"))).toBe(true);
+      expect(isParked(app(status, "azure", "down"))).toBe(true);
+      expect(isParked(app(status, "azure", "up"))).toBe(false);
+    }
   });
 });
 

@@ -219,7 +219,7 @@ function RunningForm({
             className={fieldClass}
           />
         </label>
-        <p className="text-sm text-muted">The change and reason are added to the public event history.</p>
+        <p className="text-sm text-muted">The change is added to the public event history. The reason is visible to admins only.</p>
         <FormMessages state={state} />
         <button type="submit" disabled={pending} className={primaryButtonClass}>
           {pending ? "Saving…" : "Save running state"}
