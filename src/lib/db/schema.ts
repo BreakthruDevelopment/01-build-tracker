@@ -98,7 +98,7 @@ export const eventSource = pgEnum("event_source", ["github", "health", "ops_moni
 export const runningState = pgEnum("running_state", ["up", "down"]);
 export const summaryHealth = pgEnum("summary_health", ["green", "amber", "red"]);
 
-/** One row per portfolio app (n = 1..30). Admin-written portfolio data, public to read. */
+/** One row per portfolio app (n = 1..40; 40 is MAX_PORTFOLIO_APPS in app-config.ts, 32 are in the catalog today). Admin-written portfolio data, public to read. */
 export const app = pgTable(
   "app",
   {
@@ -137,7 +137,7 @@ export const app = pgTable(
     ciAt: timestamp("ci_at", { withTimezone: true }),
   },
   (t) => [
-    check("app_n_range", sql`${t.n} between 1 and 30`),
+    check("app_n_range", sql`${t.n} between 1 and 40`),
     index("app_status_idx").on(t.status),
   ],
 );

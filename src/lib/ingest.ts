@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/lib/db";
+import { MAX_PORTFOLIO_APPS } from "@/lib/app-config";
 import { log } from "@/lib/log";
 import { setTrackerState } from "@/lib/tracker-state";
 
@@ -22,7 +23,7 @@ const httpsUrl = z
 
 const appReport = z
   .object({
-    n: z.number().int().min(1).max(30).optional(),
+    n: z.number().int().min(1).max(MAX_PORTFOLIO_APPS).optional(),
     repo: z.string().min(1).max(100).optional(),
     ci: z
       .object({
@@ -46,7 +47,7 @@ const appReport = z
 
 export const ingestReport = z.object({
   reported_at: z.iso.datetime({ offset: true }),
-  apps: z.array(appReport).max(30).default([]),
+  apps: z.array(appReport).max(MAX_PORTFOLIO_APPS).default([]),
   clouds: z
     .array(
       z.object({

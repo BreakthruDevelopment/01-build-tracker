@@ -369,6 +369,31 @@ describe.skipIf(!url)("machine endpoints (Postgres)", () => {
       expect((await post(null)).status).toBe(403);
     });
 
+    it("adds apps 31 and 32 from the catalog, and refuses a catalog over 40 apps", async () => {
+      await resetApps();
+      await park();
+      const extra = (n: number) =>
+        `  - n: ${n}\n    repo: ${n}-mt-extra\n    name: "Extra ${n}"\n    subdomain: nodns${n}.breakthruventures.ai\n    live_cloud: ${n === 31 ? "gcp" : "oci"}\n`;
+      try {
+        const base = await catalogYaml();
+        stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response(base + extra(31) + extra(32)) : healthy()));
+        const res = await post();
+        expect(res.status).toBe(200);
+        expect((await res.json()).catalog).toEqual({ updated: 2 });
+        const rows = await sql`select n, live_cloud from app where n > 30 order by n`;
+        expect(rows.map((r) => [r.n, r.live_cloud])).toEqual([[31, "gcp"], [32, "oci"]]);
+
+        // 41 entries: the catalog is rejected whole, nothing is written.
+        const tooMany = Array.from({ length: 9 }, (_, i) => extra(33 + i)).join("");
+        stubFetch(async (u) => (u.hostname === "raw.githubusercontent.com" ? new Response(base + extra(31) + extra(32) + tooMany) : healthy()));
+        const res2 = await post();
+        expect((await res2.json()).catalog).toMatchObject({ updated: 0, error: "catalog sync failed" });
+        expect(await sql`select 1 from app where n > 32`).toHaveLength(0);
+      } finally {
+        await sql`delete from app where n > 30`;
+      }
+    });
+
     it("upserts the catalog but never changes status, and polls 30 apps well under 20 s", async () => {
       await resetApps();
       await sql`update app set status = 'building' where n between 2 and 30`; // app 1 stays planned
