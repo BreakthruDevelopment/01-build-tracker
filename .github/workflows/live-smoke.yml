@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Deployed version
+        run: curl -fsS https://app1.breakthruventures.ai/api/health; echo
       - name: Smoke test the live site
         env:
           BASE_URL: ${{ inputs.base_url || 'https://app1.breakthruventures.ai' }}
