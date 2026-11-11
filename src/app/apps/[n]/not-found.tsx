@@ -7,7 +7,7 @@ export default function AppNotFound() {
     <PageIntro
       section="Portfolio"
       title="Unknown app"
-      description="App numbers on this board run from 1 to 30."
+      description="App numbers on this board are assigned in the portfolio catalog; this one has no app."
       actions={
         <Link href="/" className={buttonSecondary}>
           Back to the board

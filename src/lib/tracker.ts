@@ -19,7 +19,7 @@ import { canTransition, requiresReason, STATUSES, type Status } from "@/lib/stat
 // Input schemas
 // ---------------------------------------------------------------------------
 
-/** App numbers are 1..30 in the seed; a valid-looking number with no row is a 404, not a 400. */
+/** App numbers are 1..32 today (the seed has 1..30, sync adds the rest; the cap is MAX_PORTFOLIO_APPS); a valid-looking number with no row is a 404, not a 400. */
 export const appNumber = z.union([
   z.number().int(),
   z.string().regex(/^\d{1,7}$/, "App number must be digits").transform(Number),

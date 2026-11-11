@@ -47,9 +47,17 @@ describe.skipIf(!url)("tracker schema (Postgres)", () => {
     }
   });
 
-  it("rejects a duplicate repo and an app number outside 1 to 30", async () => {
+  it("accepts app numbers 31 to 40, rejects 0 and 41, and rejects a duplicate repo", async () => {
+    try {
+      await sql`insert into app (n, repo, name, subdomain, live_cloud) values (31, 'sc-x31', 'x', 'sc-x31', 'gcp'), (40, 'sc-x40', 'x', 'sc-x40', 'oci')`;
+    } finally {
+      await sql`delete from app where n in (31, 40)`;
+    }
     await expect(
-      sql`insert into app (n, repo, name, subdomain, live_cloud) values (31, 'x', 'x', 'x', 'aws')`,
+      sql`insert into app (n, repo, name, subdomain, live_cloud) values (41, 'x', 'x', 'x', 'aws')`,
+    ).rejects.toThrow();
+    await expect(
+      sql`insert into app (n, repo, name, subdomain, live_cloud) values (0, 'x', 'x', 'x', 'aws')`,
     ).rejects.toThrow();
     await expect(
       sql`insert into app (n, repo, name, subdomain, live_cloud) values (5, '01-build-tracker', 'x', 'x', 'aws')`,

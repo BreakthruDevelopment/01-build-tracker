@@ -5,7 +5,13 @@
  */
 export const APP_TITLE = process.env.APP_NAME || "Build Tracker";
 
-export const APP_DESCRIPTION = "Part of the Breakthru Ventures 30 apps in 30 days portfolio.";
+export const APP_DESCRIPTION = "Part of the Breakthru Ventures app portfolio.";
+
+/**
+ * Highest app number and largest catalog the tracker accepts. The portfolio is 32 apps today; 40 leaves headroom
+ * so adding apps to the ai-dev-os catalog never breaks sync. The DB check `app_n_range` (schema.ts) mirrors it.
+ */
+export const MAX_PORTFOLIO_APPS = 40;
 
 export const PARENT_SITE = { href: "https://breakthruventures.ai", label: "Explore breakthruventures.ai" };
 

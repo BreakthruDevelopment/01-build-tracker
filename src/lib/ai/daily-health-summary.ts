@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_PORTFOLIO_APPS } from "@/lib/app-config";
 import type { Status } from "@/lib/status";
 import { env } from "@/lib/env";
 import { generate } from "./index";
@@ -26,7 +27,7 @@ export const outputSchema = z.object({
   apps: z
     .array(
       z.object({
-        n: z.number().int().min(1).max(30),
+        n: z.number().int().min(1).max(MAX_PORTFOLIO_APPS),
         health: z.enum(["green", "amber", "red"]),
         summary: z.string().min(1).max(400),
         flags: z

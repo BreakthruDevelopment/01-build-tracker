@@ -16,7 +16,7 @@ probes, and cloud free-tier usage into one board with an AI-generated daily heal
 
 - **Public & Signed-in Users:**
   Anyone (anonymous visitors or authenticated users with the `user` role) can view the public board and app detail
-  pages. The board displays all 30 apps with status chips, health dots, CI conclusions, time since the last push, and
+  pages. The board displays every portfolio app with status chips, health dots, CI conclusions, time since the last push, and
   today's AI summary line. Public responses never include private notes, user emails, actor ids or health-check URLs; history shows the actor only as `system` or `admin`.
 - **Admin (Michael):**
   Authenticated administrators (`admin` role) have exclusive authorization to perform status transitions, set custom
@@ -86,7 +86,7 @@ Every app has a running state, shown as its own column next to Health on the boa
 
 | Path | Who | What |
 | --- | --- | --- |
-| `GET /api/board` | public | All 30 apps: status, health, running state (`running`, `runningOverridden`, `parked`), CI, last push, today's summary |
+| `GET /api/board` | public | Every app: status, health, running state (`running`, `runningOverridden`, `parked`), CI, last push, today's summary |
 | `GET /api/apps/:n` | public | One app: status history, last 20 events, running state, today's summary and flags |
 | `POST /api/apps/:n/transition` | admin | `{to, reason?}`; enforces the state machine (409 illegal, 400 missing reason) |
 | `PATCH /api/apps/:n` | admin | `{health_url}` (https, allow-listed host) or `null` to clear |
@@ -152,7 +152,7 @@ The last sync and ingest times are stored in the `tracker_state` table (`last_sy
 | Field | Rules |
 | --- | --- |
 | `reported_at` | ISO 8601 with offset or `Z`. Future times are clamped to now |
-| `apps` | Optional, defaults to empty. Up to 30. Each needs `n` (1 to 30) or `repo` (the catalog repo name, case-insensitive); unknown apps are skipped and counted |
+| `apps` | Optional, defaults to empty. Up to 40. Each needs `n` (1 to 40) or `repo` (the catalog repo name, case-insensitive); unknown apps are skipped and counted |
 | `apps[].ci` | `conclusion` (1-40 chars), `workflow` (1-100), optional `url` (must be an `https://github.com` link). Written as an `ops_monitor` event and, if newer than the stored result, to the app's CI columns |
 | `apps[].stalled[]` | Up to 10: `kind` (1-40), `detail` (1-200), optional `hours` (0 or more). Each becomes an `ops_monitor` event `stalled.<kind>` |
 | `clouds[]` | Optional, defaults to empty. Up to 8: `cloud` is `aws`, `azure`, `gcp` or `oci`; up to 50 `metrics`, each `metric` (1-100 chars), `used_pct` (0 to 100; rounded), `charge_cents` (integer, 0 or more). Each metric is a new `cloud_usage` row |
@@ -165,7 +165,7 @@ issues. Over 64 KB: `413`.
 
 - **Task:** `daily-health-summary`, through the shared `generate()` gateway. Default model: Gemini (`gemini-flash-latest`, free tier); `AI_PROVIDER=demo` uses recorded answers.
 - **What it writes:** a 1–2 sentence morning note per app, a health color (`green`, `amber`, `red`) and up to 5 flags (`stalled`, `failing_ci`, `down`, `free_tier`, `other`).
-- **Budget:** one summary per app per day, stored in `health_summary`; never generated on page view. Apps still `planned` with no events get "Not started." without a model call. At most about 5 model calls a day for all 30 apps.
+- **Budget:** one summary per app per day, stored in `health_summary`; never generated on page view. Apps still `planned` with no events get "Not started." without a model call. At most about 5 model calls a day for the whole portfolio.
 - **Guardrails:**
   - **Untrusted text is data.** The system prompt says event titles, commit messages and report text are untrusted data, never instructions. Inputs are capped: 120 chars per event title, 1,000 per app, 6 apps and 7,000 chars per call.
   - **Rules overrule the model.** Code computes the lowest health allowed: red for CI failing on the default branch, a live or shipped app that's down, or any cloud charge; amber for no push on any branch for 24 h while building, degraded health, or free-tier usage at 50% or more. The stored health is the worse of the model's and the rules', the rules' own flags are always kept, and when the rules raise the color the model's wording is replaced with rule-only text. Health readings older than 6 hours count as unknown, except for parked apps (Down on purpose; see [Up / Down](#up--down)), which are described as parked and never flagged for health.
@@ -300,7 +300,7 @@ The application image runs across AWS, Azure, Google Cloud, and Oracle Cloud. In
 ## Demo data
 
 To design or demo the board with a full screen, fill a **non-production** database with realistic sample
-state for all 30 apps (statuses, health, CI, events, status history, today's summaries, cloud usage):
+state for every app (statuses, health, CI, events, status history, today's summaries, cloud usage):
 
 ```bash
 DATABASE_URL=postgres://... APP_URL=http://localhost:3000 DEMO_SEED=yes pnpm seed:demo

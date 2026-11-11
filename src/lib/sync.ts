@@ -3,6 +3,7 @@ import { lookup } from "node:dns/promises";
 import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { MAX_PORTFOLIO_APPS } from "@/lib/app-config";
 import { db, schema } from "@/lib/db";
 import { type Actor, assertCan } from "@/lib/auth/rbac";
 import { ConflictError, NotFoundError, TooManyRequestsError } from "@/lib/errors";
@@ -29,8 +30,12 @@ const CATALOG_TIMEOUT_MS = 4000;
  * (maxDuration is 25 s but does nothing on Lambda). 21 s leaves a few seconds to record results.
  */
 const SYNC_DEADLINE_MS = 21000;
-/** The catalog has at most 30 apps; check them all at once so cold apps don't queue behind each other. */
-const CONCURRENCY = 30;
+/**
+ * The catalog has at most MAX_PORTFOLIO_APPS (40) apps; check them all at once so cold apps don't queue behind each
+ * other. The checks are network-bound and share the SYNC_DEADLINE_MS window, so 40 at once costs no extra time; the
+ * DB pool (DB_POOL_MAX, default 5) just queues the short result writes, well inside the 21 s deadline.
+ */
+const CONCURRENCY = MAX_PORTFOLIO_APPS;
 /**
  * Confirm before Down. A scale-to-zero app can need longer than the check allows for its first request after
  * idle, and the check itself wakes it. So the first failed check only stamps `health_failing_since`. The app is
@@ -54,7 +59,7 @@ const catalogSchema = z.object({
   apps: z
     .array(
       z.object({
-        n: z.number().int().min(1).max(30),
+        n: z.number().int().min(1).max(MAX_PORTFOLIO_APPS),
         repo: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),
         name: z.string().min(1).max(200),
         subdomain: z.string().regex(/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/i),
@@ -62,7 +67,7 @@ const catalogSchema = z.object({
       }),
     )
     .min(1)
-    .max(30),
+    .max(MAX_PORTFOLIO_APPS),
 });
 
 /** Read a response body up to `limit` bytes; `truncated` is true when more was available. */

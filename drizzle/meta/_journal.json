@@ -50,6 +50,13 @@
       "when": 1794261149793,
       "tag": "0006_running-state",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794375417662,
+      "tag": "0007_widen-app-range",
+      "breakpoints": true
     }
   ]
 }

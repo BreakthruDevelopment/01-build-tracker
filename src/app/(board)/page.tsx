@@ -128,7 +128,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Boa
     <div className="min-w-0">
       <PageIntro
         section="Portfolio"
-        title="Building 30 apps in 30 days."
+        title="Building the portfolio, one app a day."
         description="Follow the progress, health, and delivery of the Breakthru portfolio."
       />
       <h2 className="mb-4 font-display text-3xl font-semibold tracking-tight">Portfolio overview</h2>
