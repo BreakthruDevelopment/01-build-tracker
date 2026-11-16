@@ -24,3 +24,8 @@ jobs:
         env:
           BASE_URL: ${{ inputs.base_url || 'https://app1.breakthruventures.ai' }}
         run: bash scripts/smoke.sh
+      - name: Report the deployed tag
+        env:
+          BASE_URL: ${{ inputs.base_url || 'https://app1.breakthruventures.ai' }}
+        run: |
+          echo "DEPLOYED_HEALTH: $(curl -fsS "$BASE_URL/api/health")"
